@@ -1,0 +1,61 @@
+version = 1
+name = "__PROJECT_NAME__"
+
+[orchestration]
+max_parallel = 3
+default_profile = "strong"
+
+# Profiles express intent. Change only model/effort/provider mappings per project.
+[profiles.cheap]
+model = "gpt-5.6-luna"
+effort = "medium"
+
+[profiles.balanced]
+model = "gpt-5.6-terra"
+effort = "high"
+
+[profiles.strong]
+model = "gpt-5.6-sol"
+effort = "high"
+
+[profiles.critical]
+model = "gpt-6-astra"
+effort = "high"
+
+[roles.explorer]
+description = "Read-only explorer that gathers repository evidence before decisions."
+profile = "cheap"
+sandbox = "read-only"
+prompt = "explorer.md"
+
+[roles.worker]
+description = "Implementation worker for one bounded, independently verifiable leaf task."
+profile = "balanced"
+sandbox = "workspace-write"
+prompt = "worker.md"
+
+[roles.tester]
+description = "Verification specialist that runs focused checks and diagnoses failures."
+profile = "balanced"
+sandbox = "workspace-write"
+prompt = "tester.md"
+
+[roles.reviewer]
+description = "Read-only reviewer for correctness, regression risk, and missing verification."
+profile = "strong"
+sandbox = "read-only"
+prompt = "reviewer.md"
+
+# Optional custom provider example:
+#
+# [providers.deepseek]
+# name = "DeepSeek"
+# base_url = "https://api.deepseek.com/"
+# env_key = "DEEPSEEK_API_KEY"
+# wire_api = "responses"
+# model_catalog_json = ".orchestra/providers/deepseek-models.json"
+# supports_standalone_web_search = true
+# capabilities = ["function", "apply_patch", "web_search"]
+#
+# Then replace that profile's model with "deepseek-flash" and add
+# provider = "deepseek".

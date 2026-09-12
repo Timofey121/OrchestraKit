@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+ORCHESTRA_KIT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$ORCHESTRA_KIT_ROOT/src:$PYTHONPATH"
+else
+  export PYTHONPATH="$ORCHESTRA_KIT_ROOT/src"
+fi
+exec python3 -m orchestra_kit "$@"
+
