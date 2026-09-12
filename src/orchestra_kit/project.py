@@ -14,6 +14,7 @@ from .render import (
     GENERATED_MARKER,
     render_agent,
     render_agents_block,
+    render_execution_contract,
     render_skill,
     render_skill_ui,
 )
@@ -53,6 +54,9 @@ def _managed_outputs(config: ProjectConfig) -> dict[str, str]:
     }
     outputs[".agents/skills/orchestrate-project/SKILL.md"] = render_skill(config)
     outputs[".agents/skills/orchestrate-project/agents/openai.yaml"] = render_skill_ui()
+    outputs[".agents/skills/orchestrate-project/references/execution-contract.md"] = (
+        render_execution_contract(config)
+    )
     return outputs
 
 
@@ -85,7 +89,9 @@ def _load_manifest(project_root: Path) -> dict[str, object] | None:
     if not isinstance(manifest, dict) or manifest.get("generated_by") != "OrchestraKit":
         raise ProjectError(f"manifest is not managed by OrchestraKit: {path}")
     files = manifest.get("files")
-    if not isinstance(files, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in files.items()):
+    if not isinstance(files, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in files.items()
+    ):
         raise ProjectError(f"manifest has invalid files table: {path}")
     return manifest
 
@@ -113,7 +119,9 @@ def _extract_agents_block(text: str) -> str | None:
 
 def _preflight_managed_file(path: Path) -> None:
     if path.exists() and GENERATED_MARKER not in path.read_text(encoding="utf-8"):
-        raise ProjectError(f"refusing to overwrite file not managed by OrchestraKit: {path}")
+        raise ProjectError(
+            f"refusing to overwrite file not managed by OrchestraKit: {path}"
+        )
 
 
 def _build_manifest(outputs: dict[str, str], agents_block: str) -> str:
@@ -137,7 +145,9 @@ def sync_project(project_root: Path, kit_root: Path) -> SyncResult:
     stale = sorted(previous_files - set(outputs))
 
     agents_path = _safe_path(project_root, "AGENTS.md")
-    existing_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+    existing_agents = (
+        agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+    )
     agents_block = render_agents_block(config)
     updated_agents = _updated_agents(existing_agents, agents_block)
 
@@ -167,26 +177,35 @@ def sync_project(project_root: Path, kit_root: Path) -> SyncResult:
             removed.append(relative)
 
     manifest_text = _build_manifest(outputs, agents_block)
-    if not manifest_path.exists() or manifest_path.read_text(encoding="utf-8") != manifest_text:
+    if (
+        not manifest_path.exists()
+        or manifest_path.read_text(encoding="utf-8") != manifest_text
+    ):
         _atomic_write(manifest_path, manifest_text)
         written.append(str(MANIFEST_PATH))
     return SyncResult(written=tuple(written), removed=tuple(removed))
 
 
-def init_project(project_root: Path, kit_root: Path, name: str | None = None) -> SyncResult:
+def init_project(
+    project_root: Path, kit_root: Path, name: str | None = None
+) -> SyncResult:
     project_root = project_root.resolve()
     if not project_root.is_dir():
         raise ProjectError(f"project directory does not exist: {project_root}")
     config_path = project_root / ".orchestra" / "project.toml"
     if config_path.exists():
-        raise ProjectError(f"project is already initialized: {config_path}; run sync instead")
+        raise ProjectError(
+            f"project is already initialized: {config_path}; run sync instead"
+        )
     template_path = kit_root.resolve() / "templates" / "project.toml"
     try:
         template = template_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ProjectError(f"project template not found: {template_path}") from exc
     project_name = name.strip() if name and name.strip() else project_root.name
-    rendered = template.replace('"__PROJECT_NAME__"', json.dumps(project_name, ensure_ascii=False))
+    rendered = template.replace(
+        '"__PROJECT_NAME__"', json.dumps(project_name, ensure_ascii=False)
+    )
     _atomic_write(config_path, rendered)
     return sync_project(project_root, kit_root)
 
@@ -219,8 +238,13 @@ def doctor_project(
             errors.append(f"generated file is missing: {relative}")
             continue
         actual_hash = _digest(path.read_text(encoding="utf-8"))
-        if actual_hash != expected_hash or manifest_files.get(relative) != expected_hash:
-            errors.append(f"generated file drift detected: {relative}; run orchestra sync")
+        if (
+            actual_hash != expected_hash
+            or manifest_files.get(relative) != expected_hash
+        ):
+            errors.append(
+                f"generated file drift detected: {relative}; run orchestra sync"
+            )
 
     extra_manifest_files = sorted(set(manifest_files) - set(outputs))
     for relative in extra_manifest_files:
@@ -232,7 +256,9 @@ def doctor_project(
     else:
         actual_block = _extract_agents_block(agents_path.read_text(encoding="utf-8"))
         if actual_block != render_agents_block(config):
-            errors.append("AGENTS.md OrchestraKit block drift detected; run orchestra sync")
+            errors.append(
+                "AGENTS.md OrchestraKit block drift detected; run orchestra sync"
+            )
 
     used_profiles = {role.profile for role in config.roles.values()}
     for profile_name in sorted(used_profiles):
@@ -241,12 +267,16 @@ def doctor_project(
             continue
         provider = config.providers[profile.provider]
         if provider.env_key and not environment.get(provider.env_key):
-            errors.append(f"required provider environment variable is not set: {provider.env_key}")
+            errors.append(
+                f"required provider environment variable is not set: {provider.env_key}"
+            )
         if provider.model_catalog_json:
             catalog = Path(provider.model_catalog_json)
             if not catalog.is_absolute():
                 catalog = project_root.resolve() / catalog
             if not catalog.is_file():
-                errors.append(f"provider model catalog is missing: {provider.model_catalog_json}")
+                errors.append(
+                    f"provider model catalog is missing: {provider.model_catalog_json}"
+                )
 
     return DoctorResult(errors=tuple(errors), warnings=tuple(warnings))

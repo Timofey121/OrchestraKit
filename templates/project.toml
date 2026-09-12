@@ -5,6 +5,22 @@ name = "__PROJECT_NAME__"
 max_parallel = 3
 default_profile = "strong"
 
+# adaptive: root keeps small work and delegates only useful independent tracks.
+# strict: every implementation leaf and the final result receive independent review.
+# program: leaf, work-package, and final review gates for larger programs.
+[workflow]
+mode = "adaptive"
+max_repair_cycles = 2
+fresh_worker_per_leaf = true
+fresh_reviewer_always = true
+review_levels = ["final"]
+checkpoint_policy = "manual"
+git_publication = "human-controlled"
+
+# Optional project-owned Markdown policies, applied in listed order.
+[context]
+policy_files = []
+
 # Profiles express intent. Change only model/effort/provider mappings per project.
 [profiles.cheap]
 model = "gpt-5.6-luna"

@@ -36,7 +36,9 @@ def render_agent(config: ProjectConfig, role: RoleConfig) -> str:
         provider = config.providers[profile.provider]
         lines.append(f"model_provider = {_toml_string(provider.name)}")
         if provider.model_catalog_json is not None:
-            lines.append(f"model_catalog_json = {_toml_string(provider.model_catalog_json)}")
+            lines.append(
+                f"model_catalog_json = {_toml_string(provider.model_catalog_json)}"
+            )
         lines.extend(["", *_render_provider(provider)])
     return "\n".join(lines) + "\n"
 
@@ -65,7 +67,10 @@ def render_skill(config: ProjectConfig) -> str:
         if profile.provider is None:
             continue
         provider = config.providers[profile.provider]
-        capabilities = ", ".join(f"`{item}`" for item in provider.capabilities) or "no capabilities declared"
+        capabilities = (
+            ", ".join(f"`{item}`" for item in provider.capabilities)
+            or "no capabilities declared"
+        )
         provider_limits.append(
             f"- Profile `{profile.name}` uses provider `{provider.name}` with {capabilities}."
         )
@@ -77,6 +82,22 @@ def render_skill(config: ProjectConfig) -> str:
             + "\n\nDo not send a task to a provider-backed leaf when the task requires an "
             "undeclared capability. Choose a compatible role/profile or keep the work in the root session.\n"
         )
+    policy_files = "\n".join(
+        f"{index}. `{path}`"
+        for index, path in enumerate(config.context.policy_files, start=1)
+    )
+    policy_section = ""
+    if policy_files:
+        policy_section = f"""
+## Project policy overlays
+
+Read these project-owned policy files in order before planning or delegating:
+
+{policy_files}
+
+Later policy files may narrow earlier ones, but none can override higher-priority
+instructions or the nearest applicable `AGENTS.md`.
+"""
     return f"""---
 name: orchestrate-project
 description: Coordinate substantial multi-step repository work with Codex as the root orchestrator and project-configured leaf agents. Use when work has independent research, implementation, testing, or review tracks; keep small tightly coupled tasks local.
@@ -93,6 +114,12 @@ to a leaf agent.
 Read `.orchestra/project.toml` before delegating. It is the source of truth for
 role-to-profile mappings. The generated custom agents already contain the
 configured model, reasoning effort, sandbox, and optional provider.
+
+Before implementation or review delegation, read
+`references/execution-contract.md`. It defines the active `{config.workflow.mode}`
+workflow, task and result schemas, review gates, repair limit, evidence rules,
+and Git authority boundaries.
+{policy_section}
 
 ## Available leaf agents
 
@@ -122,6 +149,133 @@ instructions.
 """
 
 
+def render_execution_contract(config: ProjectConfig) -> str:
+    workflow = config.workflow
+    review_levels = (
+        ", ".join(f"`{level}`" for level in workflow.review_levels) or "none"
+    )
+    policy_files = (
+        "\n".join(
+            f"{index}. `{path}`"
+            for index, path in enumerate(config.context.policy_files, start=1)
+        )
+        or "No additional project policy files are configured."
+    )
+    mode_rules = {
+        "adaptive": (
+            "Keep small or tightly coupled work in the root session. Delegate only "
+            "bounded, substantial work when separation improves speed or independent "
+            "verification."
+        ),
+        "strict": (
+            "Send each implementation leaf through worker then independent leaf review. "
+            "Do not accept the overall result before the final review gate passes."
+        ),
+        "program": (
+            "Plan explicit leaves and work packages. Review every leaf, each completed "
+            "work package, and the final integrated result before declaring completion."
+        ),
+    }[workflow.mode]
+    worker_freshness = (
+        "Use a fresh worker session for each new leaf; a repair cycle may return to the "
+        "same worker for that leaf."
+        if workflow.fresh_worker_per_leaf
+        else "The root may reuse a worker session across leaves when its context remains bounded."
+    )
+    reviewer_freshness = (
+        "Use a fresh reviewer session for every review and re-review."
+        if workflow.fresh_reviewer_always
+        else "A reviewer session may be reused when independence is not reduced."
+    )
+    checkpoint_rule = {
+        "manual": (
+            "Create Git checkpoints only when the root explicitly decides they are needed "
+            "and the user has authorized commits."
+        ),
+        "after-review": (
+            "After a passing review, the root may create a checkpoint only when the user's "
+            "request already authorizes commits."
+        ),
+    }[workflow.checkpoint_policy]
+    publication_rule = {
+        "human-controlled": (
+            "Never push, publish, open a pull request, or deploy without explicit user "
+            "authorization."
+        ),
+        "never": "Do not push, publish, open a pull request, or deploy under this workflow.",
+    }[workflow.git_publication]
+    return f"""<!-- {GENERATED_MARKER} -->
+
+# Execution contract
+
+Mode: `{workflow.mode}`
+
+{mode_rules}
+
+- Maximum repair cycles: `{workflow.max_repair_cycles}`.
+- Review levels: {review_levels}.
+- {worker_freshness}
+- {reviewer_freshness}
+
+## Source of truth
+
+Treat chat context as disposable. Repository instructions, current files, Git
+diffs, test output, and task artifacts are durable evidence. Re-read relevant
+sources before decisions after interruption or context loss.
+
+Apply configured project policy overlays in this order:
+
+{policy_files}
+
+Later listed policies may narrow earlier policies. They never override system,
+developer, current user, or nearer `AGENTS.md` instructions.
+
+## Leaf task brief
+
+Every delegated leaf receives exactly these sections:
+
+```text
+GOAL
+SOURCES OF TRUTH
+SCOPE
+ACCEPTANCE CRITERIA
+VERIFICATION
+CONTEXT
+```
+
+The root supplies concrete paths and forbidden changes. A leaf stays inside the
+brief, never delegates, preserves unrelated work, and reports a decision to the
+root instead of asking the user directly.
+
+## Review and repair
+
+A reviewer receives the original brief plus the exact diff or artifact being
+reviewed. The reviewer is independent, read-only, never fixes findings, and must
+return exactly `VERDICT: PASS` or `VERDICT: FAIL`. A PASS has no blocking
+findings; observations remain non-blocking.
+
+On FAIL, the root sends only the blocking findings and original acceptance
+criteria into a bounded repair cycle, then requests a new review. Stop after
+`{workflow.max_repair_cycles}` failed repair cycles and report the unresolved
+blocker to the user. Never relabel an unverified result as complete.
+
+## Evidence
+
+Separate observed facts, command output, and test results from inference. Report
+commands and outcomes precisely. Missing or unavailable verification is a gap,
+not a pass. The root independently inspects relevant diffs and evidence before
+integration and owns the final completion claim.
+
+## Git authority
+
+{checkpoint_rule}
+
+Leaf agents never stage, commit, push, publish, open pull requests, or deploy
+unless the root brief explicitly grants the specific action within authority the
+user already provided. {publication_rule}
+"""
+
+
 def render_skill_ui() -> str:
     return f"""# {GENERATED_MARKER}
 interface:
@@ -142,5 +296,7 @@ For substantial work with independent tracks, use the `$orchestrate-project`
 skill and the generated custom agents: {role_names}. Codex remains the sole root
 orchestrator and must verify leaf-agent results before integration. Keep small or
 tightly coupled work in the root session. Project orchestration settings live in
-`.orchestra/project.toml`; after editing them, run `orchestra sync` from the kit.
+`.orchestra/project.toml`; the generated execution contract defines workflow
+gates and authority boundaries. After editing settings, run `orchestra sync`
+from the kit.
 {AGENTS_END}"""

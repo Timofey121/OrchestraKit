@@ -5,7 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orchestra_kit.project import ProjectError, doctor_project, init_project, sync_project
+from orchestra_kit.project import (
+    ProjectError,
+    doctor_project,
+    init_project,
+    sync_project,
+)
 
 
 CONFIG = """\
@@ -15,6 +20,18 @@ name = "Demo"
 [orchestration]
 max_parallel = 2
 default_profile = "strong"
+
+[workflow]
+mode = "adaptive"
+max_repair_cycles = 2
+fresh_worker_per_leaf = true
+fresh_reviewer_always = true
+review_levels = ["final"]
+checkpoint_policy = "manual"
+git_publication = "human-controlled"
+
+[context]
+policy_files = ["docs/agent-policy.md"]
 
 [providers.deepseek]
 name = "DeepSeek"
@@ -57,7 +74,10 @@ class ProjectTests(unittest.TestCase):
         self.project.mkdir()
         (self.kit / "templates" / "roles").mkdir(parents=True)
         (self.kit / "templates" / "project.toml").write_text(
-            CONFIG.replace('name = "Demo"', 'name = "__PROJECT_NAME__"'), encoding="utf-8"
+            CONFIG.replace('name = "Demo"', 'name = "__PROJECT_NAME__"').replace(
+                'policy_files = ["docs/agent-policy.md"]', "policy_files = []"
+            ),
+            encoding="utf-8",
         )
         (self.kit / "templates" / "roles" / "worker.md").write_text(
             "Implement only the assigned leaf.", encoding="utf-8"
@@ -66,7 +86,13 @@ class ProjectTests(unittest.TestCase):
             "Review without editing.", encoding="utf-8"
         )
         (self.project / ".orchestra").mkdir()
-        (self.project / ".orchestra" / "project.toml").write_text(CONFIG, encoding="utf-8")
+        (self.project / ".orchestra" / "project.toml").write_text(
+            CONFIG, encoding="utf-8"
+        )
+        (self.project / "docs").mkdir()
+        (self.project / "docs" / "agent-policy.md").write_text(
+            "# Project policy\n", encoding="utf-8"
+        )
         (self.project / ".orchestra" / "providers").mkdir()
         (self.project / ".orchestra" / "providers" / "deepseek-models.json").write_text(
             '{"models": []}\n', encoding="utf-8"
@@ -78,16 +104,22 @@ class ProjectTests(unittest.TestCase):
     def test_sync_generates_model_bound_leaf_agent_without_secret(self) -> None:
         sync_project(self.project, self.kit)
 
-        agent = (self.project / ".codex/agents/orchestra-worker.toml").read_text(encoding="utf-8")
+        agent = (self.project / ".codex/agents/orchestra-worker.toml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('name = "orchestra_worker"', agent)
         self.assertIn('model = "deepseek-flash"', agent)
         self.assertIn('model_provider = "deepseek"', agent)
         self.assertIn('env_key = "DEEPSEEK_API_KEY"', agent)
-        self.assertIn('model_catalog_json = ".orchestra/providers/deepseek-models.json"', agent)
+        self.assertIn(
+            'model_catalog_json = ".orchestra/providers/deepseek-models.json"', agent
+        )
         self.assertNotIn("secret-value", agent)
 
     def test_sync_preserves_existing_agents_content_and_is_idempotent(self) -> None:
-        (self.project / "AGENTS.md").write_text("# Existing instructions\n", encoding="utf-8")
+        (self.project / "AGENTS.md").write_text(
+            "# Existing instructions\n", encoding="utf-8"
+        )
 
         sync_project(self.project, self.kit)
         first = (self.project / "AGENTS.md").read_text(encoding="utf-8")
@@ -128,14 +160,20 @@ class ProjectTests(unittest.TestCase):
 
         sync_project(self.project, self.kit)
 
-        self.assertFalse((self.project / ".codex/agents/orchestra-reviewer.toml").exists())
+        self.assertFalse(
+            (self.project / ".codex/agents/orchestra-reviewer.toml").exists()
+        )
         self.assertEqual(unrelated.read_text(encoding="utf-8"), "personal")
 
     def test_doctor_detects_drift_and_missing_provider_key(self) -> None:
         sync_project(self.project, self.kit)
-        clean = doctor_project(self.project, self.kit, {"DEEPSEEK_API_KEY": "secret-value"})
+        clean = doctor_project(
+            self.project, self.kit, {"DEEPSEEK_API_KEY": "secret-value"}
+        )
         agent = self.project / ".codex/agents/orchestra-worker.toml"
-        agent.write_text(agent.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+        agent.write_text(
+            agent.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8"
+        )
         drifted = doctor_project(self.project, self.kit, {})
 
         self.assertTrue(clean.ok, clean.errors)
@@ -146,10 +184,28 @@ class ProjectTests(unittest.TestCase):
     def test_manifest_contains_relative_managed_paths(self) -> None:
         sync_project(self.project, self.kit)
 
-        manifest = json.loads((self.project / ".orchestra/manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (self.project / ".orchestra/manifest.json").read_text(encoding="utf-8")
+        )
         self.assertEqual(manifest["generated_by"], "OrchestraKit")
         self.assertIn(".codex/agents/orchestra-worker.toml", manifest["files"])
+        self.assertIn(
+            ".agents/skills/orchestrate-project/references/execution-contract.md",
+            manifest["files"],
+        )
         self.assertFalse(any(str(self.root) in path for path in manifest["files"]))
+
+    def test_sync_generates_project_workflow_contract(self) -> None:
+        sync_project(self.project, self.kit)
+
+        reference = (
+            self.project
+            / ".agents/skills/orchestrate-project/references/execution-contract.md"
+        )
+        text = reference.read_text(encoding="utf-8")
+        self.assertIn("Mode: `adaptive`", text)
+        self.assertIn("Maximum repair cycles: `2`", text)
+        self.assertIn("docs/agent-policy.md", text)
 
     def test_init_creates_config_and_compiles_project(self) -> None:
         fresh = self.root / "fresh"
@@ -160,7 +216,9 @@ class ProjectTests(unittest.TestCase):
         config = (fresh / ".orchestra/project.toml").read_text(encoding="utf-8")
         self.assertIn('name = "Fresh Project"', config)
         self.assertTrue((fresh / ".codex/agents/orchestra-worker.toml").exists())
-        self.assertTrue((fresh / ".agents/skills/orchestrate-project/SKILL.md").exists())
+        self.assertTrue(
+            (fresh / ".agents/skills/orchestrate-project/SKILL.md").exists()
+        )
 
 
 if __name__ == "__main__":

@@ -16,7 +16,8 @@ Initialize any existing project:
 ```
 
 The command creates a project configuration, generated Codex custom agents, a
-project orchestration skill, a managed `AGENTS.md` block, and a drift manifest.
+project orchestration skill with an execution contract, a managed `AGENTS.md`
+block, and a drift manifest.
 It preserves existing `AGENTS.md` content and refuses to replace user-owned
 files at managed paths.
 
@@ -31,6 +32,25 @@ Use $orchestrate-project for this task.
 
 Small and tightly coupled work remains in the root chat. Delegated work returns
 to the root Codex for verification and integration.
+
+## Choose a workflow
+
+The project configuration controls orchestration behavior independently from
+model selection:
+
+| Mode | Best for | Review gates |
+|---|---|---|
+| `adaptive` | Normal day-to-day work | Configurable; final by default |
+| `strict` | Risky features and fixes | Every implementation leaf and final |
+| `program` | Large multi-package work | Leaf, work-package, and final |
+
+All modes keep Codex as the root. The default is `adaptive`, with a maximum of
+two repair/re-review cycles. Fresh workers handle new leaves and fresh reviewers
+handle every review. Git publication always remains under user control.
+
+Project-specific policies can be listed under `[context].policy_files`. The kit
+validates those project-relative Markdown paths and writes their precedence into
+the generated execution contract.
 
 ## Change models
 
@@ -62,6 +82,35 @@ After any configuration change, regenerate and check the project:
 
 See [project configuration](docs/project-config.md) for the full format.
 
+## Upgrade an already connected project
+
+OrchestraKit never rewrites an existing `.orchestra/project.toml`. Upgrade the
+generated integration in place with:
+
+```bash
+/absolute/path/to/OrchestraKit/bin/orchestra sync /absolute/path/to/project
+/absolute/path/to/OrchestraKit/bin/orchestra doctor /absolute/path/to/project
+```
+
+An older version-1 config works unchanged with the `adaptive` defaults. Add the
+`[workflow]` and `[context]` sections from the project configuration guide only
+when you want to customize them. Start a new Codex chat after synchronization so
+the project skill and custom-agent definitions are discovered cleanly.
+
+## Everyday use
+
+Open the project as the primary folder in Codex and describe the outcome you
+want. For ordinary work, automatic skill routing is enough. For a substantial
+task, you can explicitly say:
+
+```text
+Use $orchestrate-project for this task. Follow the configured workflow and show
+me the final verification evidence.
+```
+
+The mode comes from `.orchestra/project.toml`; the prompt tells Codex to use the
+installed workflow rather than silently inventing another one.
+
 ## Custom providers
 
 Responses-compatible model providers can be declared per project. Credentials
@@ -84,12 +133,14 @@ project/
 │   └── orchestra-reviewer.toml
 ├── .agents/skills/orchestrate-project/
 │   ├── SKILL.md
+│   ├── references/execution-contract.md
 │   └── agents/openai.yaml
 └── AGENTS.md
 ```
 
 Only files carrying the OrchestraKit ownership marker are regenerated. The
-project configuration is never regenerated after initialization.
+project configuration and project policy files are never regenerated after
+initialization.
 
 ## Commands
 
@@ -110,4 +161,3 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 Architecture decisions are recorded in [docs/design.md](docs/design.md).
-

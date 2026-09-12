@@ -11,7 +11,8 @@ Generated workers are leaf executors and must not delegate further.
 
 1. Keep the OrchestraKit repository anywhere on the local machine.
 2. Run `bin/orchestra init /absolute/path/to/project` once per project.
-3. Edit only `.orchestra/project.toml` when changing profile-to-model mappings.
+3. Edit `.orchestra/project.toml` when changing workflow or profile-to-model
+   mappings, and keep any configured project policy files in the project.
 4. Run `bin/orchestra sync /absolute/path/to/project` after configuration edits.
 5. Run `bin/orchestra doctor /absolute/path/to/project` to verify configuration,
    generated files, and required provider environment variables.
@@ -31,13 +32,17 @@ Generated workers are leaf executors and must not delegate further.
 
 ## Source of truth and generated surfaces
 
-`.orchestra/project.toml` is the only project-specific source of truth. A sync
-compiles it into:
+`.orchestra/project.toml` is the orchestration source of truth. Optional
+project-owned Markdown policy overlays supply domain rules without coupling the
+kit to one repository. A sync compiles these settings into:
 
 - `.codex/agents/orchestra-<role>.toml` — one model-bound Codex custom agent per
   role;
 - `.agents/skills/orchestrate-project/SKILL.md` — reusable orchestration policy
   discovered by Codex in every project chat;
+- `.agents/skills/orchestrate-project/references/execution-contract.md` — the
+  compiled brief schema, review gates, repair limit, evidence rules, and Git
+  authority boundaries;
 - `.agents/skills/orchestrate-project/agents/openai.yaml` — UI metadata;
 - one marked block in `AGENTS.md` — durable instructions that make the root
   Codex use the project skill for substantial, divisible work;
@@ -88,9 +93,27 @@ The generated skill instructs the root Codex to:
    diff and relevant verification output.
 7. Never allow leaf agents to re-delegate.
 
+The active workflow mode controls the review topology:
+
+- `adaptive` delegates only when separation has clear value;
+- `strict` requires leaf and final review gates;
+- `program` requires leaf, work-package, and final review gates.
+
+Every delegated leaf uses a stable six-part brief. Reviewers are read-only and
+independent, return an exact PASS or FAIL, and never fix their own findings.
+Failed review can enter only the configured number of repair/re-review cycles.
+The repository, Git diff, tests, and task artifacts remain durable truth; chat
+memory does not.
+
+## Deliberate omissions
+
+OrchestraKit does not create worktrees, maintain a project management database,
+or automatically commit and push. Those concerns depend on repository workflow
+and authorization, so they can be layered on later without weakening the
+portable model/profile compiler or its execution contract.
+
 ## Portability
 
 The runtime uses Python 3.11 standard-library modules only. The shell launcher
 resolves the repository root relative to itself, so the kit directory can be
 moved. Generated project files contain no absolute path back to the kit.
-

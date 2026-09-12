@@ -18,6 +18,56 @@ generated skill; the Codex host can impose a stricter runtime limit.
 `default_profile` documents the preferred strength for root-level planning, but
 the actual root-chat model remains the model selected in Codex.
 
+## Workflow
+
+```toml
+[workflow]
+mode = "adaptive"
+max_repair_cycles = 2
+fresh_worker_per_leaf = true
+fresh_reviewer_always = true
+review_levels = ["final"]
+checkpoint_policy = "manual"
+git_publication = "human-controlled"
+```
+
+`mode` is one of:
+
+- `adaptive`: small and tightly coupled work stays with the root; substantial
+  independent tracks may be delegated;
+- `strict`: every implementation leaf requires an independent leaf review and
+  the integrated result requires final review;
+- `program`: adds work-package review between leaf and final review for large
+  structured efforts.
+
+`max_repair_cycles` is from 0 through 5. `fresh_worker_per_leaf` prevents context
+from one new leaf leaking into another. `fresh_reviewer_always` gives each
+review and re-review a clean independent context.
+
+`review_levels` accepts `leaf`, `work-package`, and `final`. Strict mode requires
+`leaf` and `final`; program mode requires all three. `checkpoint_policy` is
+`manual` or `after-review`, but never grants permission to commit by itself.
+`git_publication` is `human-controlled` or `never`; neither permits automatic
+pushes, pull requests, or deployments.
+
+Projects created before OrchestraKit 0.2 remain valid. Missing workflow fields
+receive the defaults shown above.
+
+## Project context
+
+```toml
+[context]
+policy_files = [
+  "docs/product-rules.md",
+  "docs/testing-policy.md",
+]
+```
+
+Policy files are optional, project-relative Markdown files. They must already
+exist when `sync` or `doctor` runs. They are applied in listed order; later
+files may narrow earlier ones but cannot override higher-priority instructions
+or a nearer applicable `AGENTS.md`. OrchestraKit validates but never edits them.
+
 ## Profiles
 
 ```toml
