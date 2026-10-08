@@ -92,7 +92,7 @@ def _safe_path(project_root: Path, relative: str) -> Path:
 
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent,
                                      prefix=".orchestra-", delete=False) as handle:
         temporary = Path(handle.name)
         try:

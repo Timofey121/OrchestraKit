@@ -46,3 +46,23 @@ jobs:
           git diff --check
       - name: Build distributions
         run: python -m build --no-isolation
+
+  windows-portable:
+    # Native executor process groups require POSIX; use WSL for that path.
+    # Check the standalone installer and dashboard on Windows itself.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    env:
+      PYTHONUTF8: '1'
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Installation and dashboard smoke test
+        run: python -m unittest tests.test_portability -v
