@@ -37,8 +37,10 @@ def _write_payload(path: Path, content: str | bytes) -> None:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
+            output.close()  # Windows cannot replace an open temporary file.
             temporary.replace(path)
         finally:
+            output.close()
             temporary.unlink(missing_ok=True)
 
 

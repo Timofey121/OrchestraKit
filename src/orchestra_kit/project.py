@@ -99,8 +99,10 @@ def _atomic_write(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+            handle.close()  # Windows cannot replace an open temporary file.
             temporary.replace(path)
         finally:
+            handle.close()
             temporary.unlink(missing_ok=True)
 
 
