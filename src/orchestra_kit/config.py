@@ -58,6 +58,9 @@ class RoleConfig:
 class WorkflowConfig:
     mode: str
     max_repair_cycles: int
+    max_observed_tokens: int | None
+    max_launches: int | None
+    require_fresh_evidence: bool
     fresh_worker_per_leaf: bool
     fresh_reviewer_always: bool
     review_levels: tuple[str, ...]
@@ -68,6 +71,15 @@ class WorkflowConfig:
 @dataclass(frozen=True)
 class ContextConfig:
     policy_files: tuple[str, ...]
+    max_brief_chars: int
+    max_result_chars: int
+    max_skill_catalog_tokens: int
+
+
+@dataclass(frozen=True)
+class RoutingConfig:
+    enabled: bool
+    profile_order: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -78,6 +90,7 @@ class ProjectConfig:
     default_profile: str
     workflow: WorkflowConfig
     context: ContextConfig
+    routing: RoutingConfig
     providers: dict[str, ProviderConfig]
     profiles: dict[str, ProfileConfig]
     roles: dict[str, RoleConfig]
@@ -125,8 +138,31 @@ def _validate_identifier(name: str, location: str) -> None:
         raise ConfigError(f"{location} name '{name}' must match {NAME_PATTERN.pattern}")
 
 
+def validate_provider_url(value: str) -> None:
+    parsed = urlparse(value)
+    try:
+        parsed.port
+    except ValueError:
+        raise ConfigError("provider base_url has an invalid port") from None
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+        or parsed.username is not None or parsed.password is not None
+        or parsed.query or parsed.fragment or any(ord(c) < 33 for c in value)):
+        raise ConfigError("provider base_url must be an absolute URL without credentials or parameters")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ConfigError("remote provider base_url must use HTTPS")
+
+
+def validate_provider_env(value: str | None) -> None:
+    if value is not None and (not ENV_PATTERN.fullmatch(value)
+        or value in {"HOME", "PATH", "PYTHONPATH", "CODEX_HOME", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"}
+        or value.startswith(("DYLD_", "LD_", "PYTHON", "CODEX_"))):
+        raise ConfigError("invalid provider credential environment name")
+
+
 def _load_provider(name: str, raw: Any) -> ProviderConfig:
     location = f"providers.{name}"
+    if name in {"openai", "ollama", "lmstudio"}:
+        raise ConfigError("custom provider id is reserved by Codex")
     _validate_identifier(name, location)
     table = _table(raw, location)
     _reject_unknown(
@@ -144,18 +180,15 @@ def _load_provider(name: str, raw: Any) -> ProviderConfig:
     )
     display_name = _required_string(table, "name", location)
     base_url = _required_string(table, "base_url", location)
-    parsed_url = urlparse(base_url)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise ConfigError(f"{location}.base_url must be an absolute HTTP(S) URL")
+    validate_provider_url(base_url)
     env_key = _optional_string(table, "env_key", location)
-    if env_key is not None and not ENV_PATTERN.fullmatch(env_key):
-        raise ConfigError(
-            f"{location}.env_key '{env_key}' is not a valid environment variable name"
-        )
+    validate_provider_env(env_key)
     wire_api = table.get("wire_api", "responses")
     if wire_api != "responses":
         raise ConfigError(f"{location}.wire_api must be 'responses'")
     catalog = _optional_string(table, "model_catalog_json", location)
+    if catalog is not None and (Path(catalog).is_absolute() or ".." in Path(catalog).parts):
+        raise ConfigError("model_catalog_json must be project-relative without traversal")
     supports_search = table.get("supports_standalone_web_search", False)
     if not isinstance(supports_search, bool):
         raise ConfigError(
@@ -234,6 +267,9 @@ def _load_workflow(raw: Any) -> WorkflowConfig:
         {
             "mode",
             "max_repair_cycles",
+            "max_observed_tokens",
+            "max_launches",
+            "require_fresh_evidence",
             "fresh_worker_per_leaf",
             "fresh_reviewer_always",
             "review_levels",
@@ -248,6 +284,12 @@ def _load_workflow(raw: Any) -> WorkflowConfig:
             f"workflow.mode must be one of: {', '.join(sorted(SUPPORTED_WORKFLOW_MODES))}"
         )
     max_repair_cycles = table.get("max_repair_cycles", 2)
+    max_observed_tokens = table.get('max_observed_tokens')
+    max_launches = table.get('max_launches')
+    if max_launches is not None and (type(max_launches) is not int or max_launches < 1):
+        raise ConfigError('workflow.max_launches must be a positive integer when set')
+    if max_observed_tokens is not None and (type(max_observed_tokens) is not int or max_observed_tokens < 1):
+        raise ConfigError('workflow.max_observed_tokens must be a positive integer when set')
     if (
         not isinstance(max_repair_cycles, int)
         or isinstance(max_repair_cycles, bool)
@@ -291,6 +333,9 @@ def _load_workflow(raw: Any) -> WorkflowConfig:
     return WorkflowConfig(
         mode=mode,
         max_repair_cycles=max_repair_cycles,
+        max_observed_tokens=max_observed_tokens,
+        max_launches=max_launches,
+        require_fresh_evidence=_boolean(table, 'require_fresh_evidence', location, False),
         fresh_worker_per_leaf=_boolean(table, "fresh_worker_per_leaf", location, True),
         fresh_reviewer_always=_boolean(table, "fresh_reviewer_always", location, True),
         review_levels=review_levels,
@@ -302,7 +347,7 @@ def _load_workflow(raw: Any) -> WorkflowConfig:
 def _load_context(raw: Any, project_root: Path) -> ContextConfig:
     location = "context"
     table = _table(raw, location)
-    _reject_unknown(table, {"policy_files"}, location)
+    _reject_unknown(table, {"policy_files", "max_brief_chars", "max_result_chars", "max_skill_catalog_tokens"}, location)
     policy_files_raw = table.get("policy_files", [])
     if not isinstance(policy_files_raw, list) or not all(
         isinstance(item, str) and item.strip() for item in policy_files_raw
@@ -331,7 +376,33 @@ def _load_context(raw: Any, project_root: Path) -> ContextConfig:
                     f"context.policy_files entry must be a project-relative Markdown path: {relative}"
                 )
             raise ConfigError(f"context policy file not found: {relative}")
-    return ContextConfig(policy_files=policy_files)
+    budgets = {}
+    for key, default in (("max_brief_chars", 12000), ("max_result_chars", 6000)):
+        value = table.get(key, default)
+        if type(value) is not int or not 1000 <= value <= 1000000:
+            raise ConfigError(f"context.{key} must be an integer from 1000 to 1000000")
+        budgets[key] = value
+    catalog_budget = table.get('max_skill_catalog_tokens', 1000)
+    if type(catalog_budget) is not int or not 1 <= catalog_budget <= 10000:
+        raise ConfigError('context.max_skill_catalog_tokens must be an integer from 1 to 10000')
+    budgets['max_skill_catalog_tokens'] = catalog_budget
+    return ContextConfig(policy_files=policy_files, **budgets)
+
+
+def _load_routing(raw: Any, profiles: dict[str, ProfileConfig]) -> RoutingConfig:
+    table = _table(raw, "routing")
+    _reject_unknown(table, {"enabled", "profile_order"}, "routing")
+    preferred = [name for name in ("cheap", "balanced", "strong", "critical") if name in profiles]
+    defaults = preferred + [name for name in profiles if name not in preferred]
+    order = table.get("profile_order", defaults)
+    if not isinstance(order, list) or not order or not all(isinstance(name, str) and name in profiles for name in order):
+        raise ConfigError("routing.profile_order must list existing profiles from least to most capable")
+    if len(set(order)) != len(order) or set(order) != set(profiles):
+        raise ConfigError("routing.profile_order must contain each configured profile exactly once")
+    return RoutingConfig(
+        enabled=_boolean(table, "enabled", "routing", True),
+        profile_order=tuple(order),
+    )
 
 
 def load_config(project_root: Path, kit_root: Path) -> ProjectConfig:
@@ -344,6 +415,10 @@ def load_config(project_root: Path, kit_root: Path) -> ProjectConfig:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"invalid TOML in {config_path}: {exc}") from exc
 
+    return parse_config(project_root, kit_root, raw)
+
+
+def parse_config(project_root: Path, kit_root: Path, raw: Any) -> ProjectConfig:
     _reject_unknown(
         raw,
         {
@@ -352,6 +427,7 @@ def load_config(project_root: Path, kit_root: Path) -> ProjectConfig:
             "orchestration",
             "workflow",
             "context",
+            "routing",
             "providers",
             "profiles",
             "roles",
@@ -409,6 +485,8 @@ def load_config(project_root: Path, kit_root: Path) -> ProjectConfig:
                 f"role '{role.name}' references unknown profile '{role.profile}'"
             )
 
+    routing = _load_routing(raw.get("routing", {}), profiles)
+
     return ProjectConfig(
         version=1,
         name=name,
@@ -416,6 +494,7 @@ def load_config(project_root: Path, kit_root: Path) -> ProjectConfig:
         default_profile=default_profile,
         workflow=workflow,
         context=context,
+        routing=routing,
         providers=providers,
         profiles=profiles,
         roles=roles,

@@ -1,0 +1,26 @@
+{
+  "agents_block_sha256": "c0cb34b706dc79334dacc0e5f5459ef17c86171e6dd164d32ac1248d8a6d8326",
+  "files": {
+    ".agents/skills/orchestrate-project/SKILL.md": "04fb505d6f58513bad362d05ee194035abef091e2f42df0cda760abb3a0c881e",
+    ".agents/skills/orchestrate-project/agents/openai.yaml": "20cf8055bce4ca8235186e89a1a746bfd10056301c28734de1974322f122d2a4",
+    ".agents/skills/orchestrate-project/references/execution-contract.md": "21866173b6ac509b677fe560f43ab88e55946156180213d13ea56217cd45ad7e",
+    ".codex/agents/orchestra-explorer--balanced.toml": "e4c972f8cf45ce820b2596734063af8660c00785774a54880197ed33e312b6e0",
+    ".codex/agents/orchestra-explorer--critical.toml": "5cc50e5cae7e9e22eddb77a33bcc8183cdcec162a162f20c82a2004cfbc754c0",
+    ".codex/agents/orchestra-explorer--strong.toml": "67702ecba3c86ec7f890182d81d19764ba2cdc0edf5520952858840c241c2d80",
+    ".codex/agents/orchestra-explorer.toml": "b386fe1f7e836ec912523b3acd02d0df80aa06f98ea4383e2fe93fbc9c8b6e6a",
+    ".codex/agents/orchestra-reviewer--balanced.toml": "7bb1c2b0894614b3620d0cce8d5a3d85c63b8fe340e1c9b01fb2806880bc019d",
+    ".codex/agents/orchestra-reviewer--cheap.toml": "c3453da9ffd93f4d2a406cbcebed3373f055e16763fc91cc6605799837cf3bac",
+    ".codex/agents/orchestra-reviewer--critical.toml": "4d3063f448893a85e7b09ddea2c8d88cef42c67d801b5ac395c69c09eac9ad88",
+    ".codex/agents/orchestra-reviewer.toml": "d03891c69c3918e1b11e2a6a8488ed12351574c69dd49f84e249f52b2112e4c1",
+    ".codex/agents/orchestra-tester--cheap.toml": "7f065fa7eafff63d7a01052a7fa50539c7f980ab2cfb52ee6ff0a27b5e59cbf2",
+    ".codex/agents/orchestra-tester--critical.toml": "19d13d8aa5bedcb01ca654c45a6abee4a8a9e1d9b5a119d38a11d71b5f34a476",
+    ".codex/agents/orchestra-tester--strong.toml": "a6952c1bdc74ae4a924e8f0ba1064aea95ea8cdea150590d9667aefbaed575ad",
+    ".codex/agents/orchestra-tester.toml": "43f25dded48002e9a8340e7b798a05fc75ca4336a797d90412e53ddd70fb96c8",
+    ".codex/agents/orchestra-worker--cheap.toml": "2cf472dbcd984a62b8a7f284a16eddfa63fe25f9fdf6e92fbe50ab7c0dd00dae",
+    ".codex/agents/orchestra-worker--critical.toml": "d7eaee2c04ed0aa8684474ab12e903734d5197707e3db292d1fee87ab852cd51",
+    ".codex/agents/orchestra-worker--strong.toml": "4c5ed9bd499505802ecccef1944d47d716de066749a13e8407b58f3f4f6d9129",
+    ".codex/agents/orchestra-worker.toml": "45a9869a2f5f8437c7a94934579b8a4255cf1d9a6a1c3cf123782e1b027b710c"
+  },
+  "format_version": 1,
+  "generated_by": "OrchestraKit"
+}

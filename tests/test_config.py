@@ -81,6 +81,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.default_profile, "strong")
         self.assertEqual(config.workflow.mode, "strict")
         self.assertEqual(config.workflow.max_repair_cycles, 2)
+        self.assertIsNone(config.workflow.max_observed_tokens)
         self.assertTrue(config.workflow.fresh_worker_per_leaf)
         self.assertTrue(config.workflow.fresh_reviewer_always)
         self.assertEqual(config.workflow.review_levels, ("leaf", "final"))
@@ -97,6 +98,35 @@ class ConfigTests(unittest.TestCase):
             config.providers["deepseek"].capabilities,
             ("function", "apply_patch", "web_search"),
         )
+
+    def test_provider_urls_and_environment_names_are_safe(self):
+        path=self.project / '.orchestra/project.toml'
+        for url in ['https://user:secret@example.test/v1', 'https://example.test/v1?api_key=x', 'https://example.test/v1#x', 'http://example.test/v1']:
+            path.write_text(VALID_CONFIG.replace('https://api.deepseek.com/',url))
+            with self.subTest(url=url), self.assertRaises(ConfigError):
+                load_config(self.project,self.kit)
+        for key in ['PATH','HOME','CODEX_HOME','PYTHONPATH','DYLD_INSERT_LIBRARIES']:
+            path.write_text(VALID_CONFIG.replace('DEEPSEEK_API_KEY',key))
+            with self.subTest(key=key), self.assertRaises(ConfigError):
+                load_config(self.project,self.kit)
+
+    def test_custom_providers_cannot_override_reserved_codex_ids(self):
+        p=self.project/'.orchestra/project.toml'
+        for name in ['openai','ollama','lmstudio']:
+            p.write_text(VALID_CONFIG.replace('providers.deepseek','providers.'+name).replace('provider = "deepseek"','provider = "'+name+'"'))
+            with self.subTest(name=name),self.assertRaisesRegex(ConfigError,'reserved'):
+                load_config(self.project,self.kit)
+
+    def test_observed_token_retry_limit_is_optional_and_strict(self) -> None:
+        path = self.project / '.orchestra/project.toml'
+        path.write_text(VALID_CONFIG.replace('max_repair_cycles = 2',
+                                            'max_repair_cycles = 2\nmax_observed_tokens = 200000'))
+        self.assertEqual(load_config(self.project, self.kit).workflow.max_observed_tokens, 200000)
+        for value in ['0', '-1', 'true', '2.5', '"200000"']:
+            path.write_text(VALID_CONFIG.replace('max_repair_cycles = 2',
+                'max_repair_cycles = 2\nmax_observed_tokens = ' + value))
+            with self.subTest(value=value), self.assertRaisesRegex(ConfigError, 'max_observed_tokens'):
+                load_config(self.project, self.kit)
 
     def test_load_config_rejects_unknown_role_profile(self) -> None:
         path = self.project / ".orchestra" / "project.toml"
@@ -195,6 +225,50 @@ class ConfigTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConfigError, "policy file not found"):
             load_config(self.project, self.kit)
+
+    def test_routing_and_context_defaults_keep_legacy_projects_usable(self) -> None:
+        config = load_config(self.project, self.kit)
+        self.assertTrue(config.routing.enabled)
+        self.assertEqual(config.routing.profile_order, ("cheap", "strong"))
+        self.assertEqual(config.context.max_brief_chars, 12000)
+        self.assertEqual(config.context.max_result_chars, 6000)
+        self.assertEqual(config.context.max_skill_catalog_tokens, 1000)
+
+    def test_leaf_skill_catalog_budget_is_bounded_and_project_configured(self) -> None:
+        path = self.project / '.orchestra/project.toml'
+        path.write_text(VALID_CONFIG.replace('[context]', '[context]\nmax_skill_catalog_tokens = 2000'))
+        self.assertEqual(load_config(self.project, self.kit).context.max_skill_catalog_tokens, 2000)
+        for value in ('true', '0', '10001'):
+            with self.subTest(value=value):
+                path.write_text(VALID_CONFIG.replace('[context]', '[context]\nmax_skill_catalog_tokens = ' + value))
+                with self.assertRaises(ConfigError):
+                    load_config(self.project, self.kit)
+
+    def test_explicit_routing_order_and_context_budgets_are_loaded(self) -> None:
+        path = self.project / ".orchestra/project.toml"
+        path.write_text(VALID_CONFIG.replace(
+            '[context]', '[routing]\nenabled = false\nprofile_order = ["strong", "cheap"]\n\n[context]\nmax_brief_chars = 4000\nmax_result_chars = 2000'
+        ), encoding="utf-8")
+        config = load_config(self.project, self.kit)
+        self.assertFalse(config.routing.enabled)
+        self.assertEqual(config.routing.profile_order, ("strong", "cheap"))
+        self.assertEqual(config.context.max_brief_chars, 4000)
+
+    def test_routing_rejects_unknown_duplicate_and_empty_profiles(self) -> None:
+        path = self.project / ".orchestra/project.toml"
+        for order in ['["missing"]', '["cheap", "cheap"]', '[]']:
+            with self.subTest(order=order):
+                path.write_text(VALID_CONFIG + '\n[routing]\nprofile_order = ' + order)
+                with self.assertRaises(ConfigError):
+                    load_config(self.project, self.kit)
+
+    def test_context_budgets_reject_boolean_and_unbounded_values(self) -> None:
+        path = self.project / ".orchestra/project.toml"
+        for value in ['true', '0', '1000001']:
+            with self.subTest(value=value):
+                path.write_text(VALID_CONFIG.replace('[context]', '[context]\nmax_brief_chars = ' + value))
+                with self.assertRaises(ConfigError):
+                    load_config(self.project, self.kit)
 
 
 if __name__ == "__main__":

@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
 from .config import ConfigError, ProjectConfig, load_config
+from .routing import agent_identity
 from .render import (
     AGENTS_END,
     AGENTS_START,
@@ -52,6 +54,18 @@ def _managed_outputs(config: ProjectConfig) -> dict[str, str]:
         f".codex/agents/orchestra-{role.name}.toml": render_agent(config, role)
         for role in config.roles.values()
     }
+    if config.routing.enabled:
+        identities = {f"orchestra_{role.name}" for role in config.roles.values()}
+        for role in config.roles.values():
+            for profile in config.profiles:
+                if profile == role.profile:
+                    continue
+                identity, filename = agent_identity(config, role.name, profile)
+                relative = f".codex/agents/{filename}"
+                if identity in identities or relative in outputs:
+                    raise ProjectError(f"generated agent identity collision: {identity}")
+                identities.add(identity)
+                outputs[relative] = render_agent(config, role, profile)
     outputs[".agents/skills/orchestrate-project/SKILL.md"] = render_skill(config)
     outputs[".agents/skills/orchestrate-project/agents/openai.yaml"] = render_skill_ui()
     outputs[".agents/skills/orchestrate-project/references/execution-contract.md"] = (
@@ -68,14 +82,26 @@ def _safe_path(project_root: Path, relative: str) -> Path:
     resolved = (root / candidate).resolve()
     if resolved != root and root not in resolved.parents:
         raise ProjectError(f"managed path escapes project: {relative}")
-    return resolved
+    lexical = root
+    for part in candidate.parts:
+        lexical = lexical / part
+        if lexical.is_symlink():
+            raise ProjectError(f"symlinked managed path: {relative}")
+    return lexical
 
 
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".orchestra-tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(path)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                     prefix=".orchestra-", delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _load_manifest(project_root: Path) -> dict[str, object] | None:
@@ -192,7 +218,7 @@ def init_project(
     project_root = project_root.resolve()
     if not project_root.is_dir():
         raise ProjectError(f"project directory does not exist: {project_root}")
-    config_path = project_root / ".orchestra" / "project.toml"
+    config_path = _safe_path(project_root, ".orchestra/project.toml")
     if config_path.exists():
         raise ProjectError(
             f"project is already initialized: {config_path}; run sync instead"
@@ -207,7 +233,19 @@ def init_project(
         '"__PROJECT_NAME__"', json.dumps(project_name, ensure_ascii=False)
     )
     _atomic_write(config_path, rendered)
-    return sync_project(project_root, kit_root)
+    try:
+        return sync_project(project_root, kit_root)
+    except Exception:
+        # Sync preflights ownership before generating files. Undo our new
+        # configuration on refusal, so a corrected project can be retried.
+        # Preserve a configuration another writer changed in the meantime.
+        try:
+            safe = _safe_path(project_root, ".orchestra/project.toml")
+            if safe.read_text(encoding="utf-8") == rendered:
+                safe.unlink()
+        except (OSError, UnicodeError, ProjectError):
+            pass
+        raise
 
 
 def doctor_project(
@@ -260,15 +298,22 @@ def doctor_project(
                 "AGENTS.md OrchestraKit block drift detected; run orchestra sync"
             )
 
-    used_profiles = {role.profile for role in config.roles.values()}
+    used_profiles = set(config.profiles) if config.routing.enabled else {role.profile for role in config.roles.values()}
     for profile_name in sorted(used_profiles):
         profile = config.profiles[profile_name]
         if profile.provider is None:
             continue
         provider = config.providers[profile.provider]
-        if provider.env_key and not environment.get(provider.env_key):
+        credential_available = bool(provider.env_key and environment.get(provider.env_key))
+        if provider.env_key and not credential_available and environ is None:
+            from .providers import ProviderCredentialService, CredentialStoreError
+            try:
+                credential_available = ProviderCredentialService(environment=environment).status(provider).available
+            except CredentialStoreError:
+                pass
+        if provider.env_key and not credential_available:
             errors.append(
-                f"required provider environment variable is not set: {provider.env_key}"
+                f"required provider credential is unavailable: {provider.env_key}"
             )
         if provider.model_catalog_json:
             catalog = Path(provider.model_catalog_json)
@@ -277,6 +322,29 @@ def doctor_project(
             if not catalog.is_file():
                 errors.append(
                     f"provider model catalog is missing: {provider.model_catalog_json}"
+                )
+                continue
+            try:
+                catalog_value = json.loads(catalog.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                errors.append(
+                    "provider model catalog contains invalid JSON: "
+                    f"{provider.model_catalog_json}: {exc}"
+                )
+                continue
+            except (OSError, UnicodeError) as exc:
+                errors.append(
+                    "provider model catalog cannot be read: "
+                    f"{provider.model_catalog_json}: {exc}"
+                )
+                continue
+            from .model_catalog import validate_catalog
+            try:
+                validate_catalog(catalog_value)
+            except ValueError as exc:
+                errors.append(
+                    "provider model catalog schema is invalid: "
+                    f"{provider.model_catalog_json}: {exc}"
                 )
 
     return DoctorResult(errors=tuple(errors), warnings=tuple(warnings))

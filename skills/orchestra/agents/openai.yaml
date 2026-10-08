@@ -1,0 +1,6 @@
+interface:
+  display_name: "Orchestra"
+  short_description: "Adaptive repository work with verified progress"
+  default_prompt: "Use $orchestra to plan, route, verify, and complete this repository task."
+policy:
+  allow_implicit_invocation: true

@@ -1,163 +1,75 @@
 # OrchestraKit
 
-OrchestraKit gives any local Codex project the same reusable orchestration
-structure while letting each project choose its own models. Codex always stays
-the root orchestrator. Generated role agents are bounded leaf executors for
-exploration, implementation, testing, and review.
+OrchestraKit организует работу с кодом в Codex: помогает разделить большую
+задачу между исполнителями, выбрать модели и проверить результат. Небольшие
+задачи главный агент выполняет в текущем чате. В локальной панели можно
+переключаться между проектами, смотреть чаты и настраивать модели.
 
-The kit uses Python 3.11 and has no runtime dependencies.
+## Установка
 
-## Quick start
+Нужны Python 3.11+ и Codex. Для нативного запуска исполнителей нужен Codex CLI
+в `PATH`. Поддерживаются macOS и Linux; на Windows используйте WSL.
+Python-библиотеки устанавливать не требуется, готовая панель уже входит в набор.
 
-Initialize any existing project:
-
-```bash
-/absolute/path/to/OrchestraKit/bin/orchestra init /absolute/path/to/project --name "My Project"
-```
-
-The command creates a project configuration, generated Codex custom agents, a
-project orchestration skill with an execution contract, a managed `AGENTS.md`
-block, and a drift manifest.
-It preserves existing `AGENTS.md` content and refuses to replace user-owned
-files at managed paths.
-
-Open the project as the primary folder of a new Codex chat. Project instructions
-and skills are discovered automatically. For a substantial divisible request,
-Codex can select the generated skill implicitly; you can also request it
-explicitly:
-
-```text
-Use $orchestrate-project for this task.
-```
-
-Small and tightly coupled work remains in the root chat. Delegated work returns
-to the root Codex for verification and integration.
-
-## Choose a workflow
-
-The project configuration controls orchestration behavior independently from
-model selection:
-
-| Mode | Best for | Review gates |
-|---|---|---|
-| `adaptive` | Normal day-to-day work | Configurable; final by default |
-| `strict` | Risky features and fixes | Every implementation leaf and final |
-| `program` | Large multi-package work | Leaf, work-package, and final |
-
-All modes keep Codex as the root. The default is `adaptive`, with a maximum of
-two repair/re-review cycles. Fresh workers handle new leaves and fresh reviewers
-handle every review. Git publication always remains under user control.
-
-Project-specific policies can be listed under `[context].policy_files`. The kit
-validates those project-relative Markdown paths and writes their precedence into
-the generated execution contract.
-
-## Change models
-
-Edit the project file:
-
-```text
-<project>/.orchestra/project.toml
-```
-
-Profiles separate cost and strength from roles. A typical mapping is:
-
-| Profile | Default model | Default effort |
-|---|---|---|
-| `cheap` | `gpt-5.6-luna` | `medium` |
-| `balanced` | `gpt-5.6-terra` | `high` |
-| `strong` | `gpt-5.6-sol` | `high` |
-| `critical` | `gpt-6-astra` | `high` |
-
-Roles select profiles, so changing one profile can move several roles to a new
-model without rewriting their instructions. The model for the root chat remains
-the model selected in Codex; project profiles configure spawned leaf agents.
-
-After any configuration change, regenerate and check the project:
+Склонируйте репозиторий и выполните:
 
 ```bash
-/absolute/path/to/OrchestraKit/bin/orchestra sync /absolute/path/to/project
-/absolute/path/to/OrchestraKit/bin/orchestra doctor /absolute/path/to/project
+git clone https://github.com/Timofey121/OrchestraKit.git
+cd OrchestraKit
+./bin/orchestra setup
+./bin/orchestra init "<путь-к-проекту>" --name "Название проекта"
+./bin/orchestra doctor "<путь-к-проекту>"
 ```
 
-See [project configuration](docs/project-config.md) for the full format.
+Если вы скачали ZIP, распакуйте его и выполняйте команды из папки OrchestraKit.
 
-## Upgrade an already connected project
+`setup` устанавливает навык и определения хуков для Codex. Откройте `/hooks`
+в Codex, просмотрите их и подтвердите доверие. Затем откройте папку своего
+проекта в новом чате Codex. `doctor` проверяет локальную настройку;
+доступность моделей зависит от вашего аккаунта.
 
-OrchestraKit never rewrites an existing `.orchestra/project.toml`. Upgrade the
-generated integration in place with:
+## Как пользоваться
+
+Поставьте задачу обычными словами, например:
+
+> Добавь экспорт отчёта в CSV. Сохрани текущий формат данных,
+> запусти тесты и покажи результат. Ничего не коммить.
+
+Чтобы открыть панель, выполните из папки OrchestraKit:
 
 ```bash
-/absolute/path/to/OrchestraKit/bin/orchestra sync /absolute/path/to/project
-/absolute/path/to/OrchestraKit/bin/orchestra doctor /absolute/path/to/project
+./bin/orchestra ui
 ```
 
-An older version-1 config works unchanged with the `adaptive` defaults. Add the
-`[workflow]` and `[context]` sections from the project configuration guide only
-when you want to customize them. Start a new Codex chat after synchronization so
-the project skill and custom-agent definitions are discovered cleanly.
+Адрес: `http://127.0.0.1:8731`. Выберите проект, затем чат или задачу.
+Панель читает локальные данные Codex и работает, пока запущен сервер.
+Для остановки нажмите `Ctrl+C` в терминале.
 
-## Everyday use
+## Возможности
 
-Open the project as the primary folder in Codex and describe the outcome you
-want. For ordinary work, automatic skill routing is enough. For a substantial
-task, you can explicitly say:
+- Отдельные роли для исследования, реализации, тестирования и ревью.
+- Выбор профиля по сложности и риску; переход к более сильной модели при
+  повторных ошибках, с ограничением числа попыток.
+- Привязка проверок и ревью к версии файлов по настройке проекта.
+- История задач, очередь с зависимостями, отмена запусков и отдельные рабочие копии.
+- Проекты, чаты, настройки моделей и доступные счётчики токенов в одной панели.
 
-```text
-Use $orchestrate-project for this task. Follow the configured workflow and show
-me the final verification evidence.
-```
+В разделе «Модели» можно настроить исполнителей и подключить внешний сервис.
+Он должен поддерживать **Responses API и нужные инструменты Codex**. Ключи
+хранятся отдельно от кода: в окружении или macOS Keychain. Модель главного
+чата по-прежнему выбирается в Codex. Экономию оценивают по реальным запускам;
+фиксированного процента OrchestraKit не обещает.
 
-The mode comes from `.orchestra/project.toml`; the prompt tells Codex to use the
-installed workflow rather than silently inventing another one.
+## Подробнее и участие
 
-## Custom providers
+[Подключение и устранение проблем](docs/getting-started.md) ·
+[Все возможности](docs/features.md) ·
+[Настройки проекта](docs/project-config.md) ·
+[Архитектура](docs/architecture.md)
 
-Responses-compatible model providers can be declared per project. Credentials
-are read from environment variables and never stored in the kit or project.
-Provider-specific model catalogs can also remain inside the project.
+Для своего изменения начните с [CONTRIBUTING.md](CONTRIBUTING.md).
+В репозитории есть шаблоны issue и pull request. Лицензия [MIT](LICENSE).
+[Лицензии библиотек панели](src/orchestra_kit/web/THIRD_PARTY_NOTICES.txt).
 
-See [DeepSeek setup](docs/providers/deepseek.md) for a concrete example.
-
-## What gets generated
-
-```text
-project/
-├── .orchestra/
-│   ├── project.toml
-│   └── manifest.json
-├── .codex/agents/
-│   ├── orchestra-explorer.toml
-│   ├── orchestra-worker.toml
-│   ├── orchestra-tester.toml
-│   └── orchestra-reviewer.toml
-├── .agents/skills/orchestrate-project/
-│   ├── SKILL.md
-│   ├── references/execution-contract.md
-│   └── agents/openai.yaml
-└── AGENTS.md
-```
-
-Only files carrying the OrchestraKit ownership marker are regenerated. The
-project configuration and project policy files are never regenerated after
-initialization.
-
-## Commands
-
-```text
-orchestra init [PROJECT] [--name NAME]
-orchestra sync [PROJECT]
-orchestra doctor [PROJECT]
-```
-
-`PROJECT` defaults to the current directory. `doctor` exits nonzero when the
-configuration is invalid, a generated file drifted, a required provider key is
-missing, or a configured model catalog cannot be found.
-
-## Development
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
-
-Architecture decisions are recorded in [docs/design.md](docs/design.md).
+[Презентация и текст выступления](https://github.com/Timofey121/OrchestraKit/releases)
+доступны в материалах релиза.

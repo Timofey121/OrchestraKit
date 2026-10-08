@@ -4,5 +4,41 @@ __pycache__/
 .venv/
 build/
 dist/
+# Temporary source trees created while building a source distribution
+orchestra_kit-*/
 *.egg-info/
 
+# Local credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Orchestra runtime records can contain prompts, command output, and host paths.
+.orchestra/*.lock
+.orchestra/queue.sqlite*
+.orchestra/checks/
+.orchestra/evidence/
+.orchestra/executions/
+.orchestra/handoffs/
+.orchestra/reviews/
+.orchestra/runs/
+.orchestra/presentation-build/
+
+# Local verification reports and receipts can record checkout and host paths.
+docs/orchestra-0.*
+docs/orchestra-ui-*
+docs/research/**/activation-evals.json
+docs/research/**/activation.json
+docs/research/**/screenshot-usage.json
+docs/research/**/final-reviewed-snapshot.json
+docs/research/**/final-verification.json
+docs/research/**/observed-native-usage.json
+
+# Private historical material and local IDE settings
+.orchestra/archive/
+.idea/
+.DS_Store
+
+# Local talk deliverables and generated previews
+output/

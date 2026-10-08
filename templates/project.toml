@@ -11,6 +11,13 @@ default_profile = "strong"
 [workflow]
 mode = "adaptive"
 max_repair_cycles = 2
+# Bind check/review artifacts to explicit files. Enable for completion enforcement.
+require_fresh_evidence = false
+# Optional maximum dispatches in the durable queue / attempts in one native job.
+# max_launches = 12
+# Optional observed input+output threshold before another automatic retry.
+# It cannot cap the first call. Missing counters stop retries when enabled.
+# max_observed_tokens = 200000
 fresh_worker_per_leaf = true
 fresh_reviewer_always = true
 review_levels = ["final"]
@@ -20,6 +27,14 @@ git_publication = "human-controlled"
 # Optional project-owned Markdown policies, applied in listed order.
 [context]
 policy_files = []
+max_brief_chars = 12000
+max_result_chars = 6000
+max_skill_catalog_tokens = 1000
+
+# Routing is enabled by default. To customize it, add:
+# [routing]
+# enabled = true
+# profile_order = ["cheap", "balanced", "strong", "critical"]
 
 # Profiles express intent. Change only model/effort/provider mappings per project.
 [profiles.cheap]

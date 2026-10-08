@@ -1,0 +1,13 @@
+include README.md CONTRIBUTING.md LICENSE DESIGN.md setup.py bin/orchestra
+include docs/getting-started.md docs/local-dashboard.md docs/project-config.md
+include docs/hooks-and-orchestration.md docs/architecture.md docs/features.md
+recursive-include docs/providers *.md
+recursive-include templates *.toml *.md
+recursive-include skills/orchestra *.md *.py *.yaml
+recursive-include src/orchestra_kit/web *.html *.css *.js *.png *.txt
+global-exclude __pycache__ *.py[cod]
+
+include frontend/build.mjs frontend/package.json frontend/package-lock.json
+recursive-include frontend/src *.js *.jsx
+recursive-include tests *.py
+recursive-include .github *.md *.yml

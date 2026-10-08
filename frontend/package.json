@@ -1,0 +1,21 @@
+{
+  "name": "orchestra-local-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "framer-motion": "12.23.24",
+    "lucide-react": "0.468.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.11"
+  },
+  "overrides": {
+    "motion-dom": "12.23.23",
+    "motion-utils": "12.23.6"
+  }
+}
