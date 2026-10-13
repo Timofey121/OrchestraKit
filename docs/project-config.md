@@ -85,6 +85,8 @@ policy_files = [
 max_brief_chars = 12000
 max_result_chars = 6000
 max_skill_catalog_tokens = 1000
+# Opt in after checking your workload; the default is "tail".
+repair_context = "tail"
 ```
 
 Policy files are optional, project-relative Markdown files. They must already
@@ -200,3 +202,7 @@ provider = "example"
 
 Run `orchestra sync` after changes and `orchestra doctor` before relying on the
 new profile in a Codex chat.
+
+Режим `context.repair_context` выбирает сведения для повторной попытки native
+executor: `tail` сохраняет прежний конец лога, `diagnostic` добавляет найденные
+строки ошибки и метаданные проверки. [Подробнее](workflow-comparison.md).

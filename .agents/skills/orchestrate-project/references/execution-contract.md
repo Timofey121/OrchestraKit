@@ -21,6 +21,7 @@ Increasing profile order: `cheap`, `balanced`, `strong`, `critical`.
 Brief limit: `12000` characters.
 Result limit: `6000` characters.
 Native leaf skill-catalog limit: `1000` tokens.
+Native retry evidence mode: `diagnostic`.
 
 Use the installed `orchestra` skill's bundled launcher, or `bin/orchestra` from
 an available kit checkout. All commands below follow that launcher:

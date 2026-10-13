@@ -74,6 +74,7 @@ class ContextConfig:
     max_brief_chars: int
     max_result_chars: int
     max_skill_catalog_tokens: int
+    repair_context: str = "tail"
 
 
 @dataclass(frozen=True)
@@ -347,7 +348,7 @@ def _load_workflow(raw: Any) -> WorkflowConfig:
 def _load_context(raw: Any, project_root: Path) -> ContextConfig:
     location = "context"
     table = _table(raw, location)
-    _reject_unknown(table, {"policy_files", "max_brief_chars", "max_result_chars", "max_skill_catalog_tokens"}, location)
+    _reject_unknown(table, {"policy_files", "max_brief_chars", "max_result_chars", "max_skill_catalog_tokens", "repair_context"}, location)
     policy_files_raw = table.get("policy_files", [])
     if not isinstance(policy_files_raw, list) or not all(
         isinstance(item, str) and item.strip() for item in policy_files_raw
@@ -386,7 +387,10 @@ def _load_context(raw: Any, project_root: Path) -> ContextConfig:
     if type(catalog_budget) is not int or not 1 <= catalog_budget <= 10000:
         raise ConfigError('context.max_skill_catalog_tokens must be an integer from 1 to 10000')
     budgets['max_skill_catalog_tokens'] = catalog_budget
-    return ContextConfig(policy_files=policy_files, **budgets)
+    repair_context=table.get('repair_context','tail')
+    if not isinstance(repair_context,str) or repair_context not in {'tail','diagnostic'}:
+        raise ConfigError('context.repair_context must be tail or diagnostic')
+    return ContextConfig(policy_files=policy_files, repair_context=repair_context, **budgets)
 
 
 def _load_routing(raw: Any, profiles: dict[str, ProfileConfig]) -> RoutingConfig:

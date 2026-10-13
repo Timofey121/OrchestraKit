@@ -30,6 +30,8 @@ policy_files = []
 max_brief_chars = 12000
 max_result_chars = 6000
 max_skill_catalog_tokens = 1000
+# Opt in after comparing your workload; "tail" preserves the legacy retry input.
+# repair_context = "diagnostic"
 
 # Routing is enabled by default. To customize it, add:
 # [routing]

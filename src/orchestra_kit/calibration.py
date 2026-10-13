@@ -152,3 +152,146 @@ def calibrate_receipts(samples: list[dict], configured_profiles: Iterable[str]) 
     return {"profiles": report, "recommendation": recommendation,
             "automatic_config_rewrite": False, "root_model_switch": False,
             "model_attestation": "requested settings are receipt metadata, not runtime attestation"}
+
+
+def _names(value: Any, location: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)):
+        raise ValueError(f"{location} must be an iterable of labels")
+    try:
+        names = tuple(value)
+    except TypeError as exc:
+        raise ValueError(f"{location} must be an iterable of labels") from exc
+    if not names or not all(isinstance(name, str) and name for name in names) or len(set(names)) != len(names):
+        raise ValueError(f"{location} must contain unique nonempty labels")
+    return names
+
+
+def _comparison_metrics(report: dict[str, Any], profiles: tuple[str, ...]) -> dict[str, Any]:
+    rows = [report["profiles"][name] for name in profiles]
+    counters = {name: _metric([row["observed_total_tokens" if name == "total_tokens" else name] for row in rows])
+                for name in _COUNTERS}
+    return {"sample_count": sum(row["sample_count"] for row in rows),
+            "attempt_count": sum(row["attempt_count"] for row in rows),
+            "quality_pass_count": sum(row["quality_pass_count"] for row in rows),
+            "retries": sum(row["retries"] for row in rows),
+            "elapsed_seconds": _metric([row["elapsed_seconds"] for row in rows]),
+            "all_attempt_usage_complete": all(row["all_attempt_usage_complete"] for row in rows),
+            **counters}
+
+
+def _initial_settings(rows: list[dict[str, Any]], profiles: tuple[str, ...], variant: str) -> dict[str, tuple[str, str]]:
+    settings: dict[str, tuple[str, str]] = {}
+    for profile in profiles:
+        found = {(row["model"], row["effort"]) for row in rows if row["profile"] == profile}
+        if len(found) != 1:
+            raise ValueError(f"variant {variant} must use one initial requested settings pair per profile")
+        settings[profile] = next(iter(found))
+    return settings
+
+
+def compare_workflows(samples: list[dict], configured_profiles: Iterable[str], variants: Iterable[str], *, baseline: str) -> dict:
+    """Compare finite workflow variants with equal fixtures and initial routing settings.
+
+    This is descriptive corpus accounting.  It cannot establish a statistical
+    guarantee about future runs, and it never estimates currency costs.
+    """
+    if not isinstance(samples, list) or not samples:
+        raise ValueError("samples must be a nonempty list")
+    profiles = _names(configured_profiles, "configured_profiles")
+    labels = _names(variants, "variants")
+    if set(labels) & set(profiles):
+        raise ValueError("variant labels must not be configured profile names")
+    if not isinstance(baseline, str) or baseline not in labels:
+        raise ValueError("baseline must be a configured variant label")
+
+    configured = set(profiles)
+    wrapped: dict[str, list[dict[str, Any]]] = {label: [] for label in labels}
+    raw_samples: dict[str, list[dict[str, Any]]] = {label: [] for label in labels}
+    for wrapper in samples:
+        if not isinstance(wrapper, dict) or set(wrapper) != {"variant", "sample"}:
+            raise ValueError("workflow sample must contain only variant and sample")
+        label = wrapper["variant"]
+        if not isinstance(label, str) or label not in wrapped:
+            raise ValueError("workflow sample variant must be configured")
+        if not isinstance(wrapper["sample"], dict):
+            raise ValueError("workflow sample must contain a calibration sample")
+        wrapped[label].append(wrapper["sample"])
+        raw_samples[label].append(_sample(wrapper["sample"], configured))
+    if any(not rows for rows in wrapped.values()):
+        raise ValueError("each variant must contain samples")
+
+    reports: dict[str, dict[str, Any]] = {}
+    initial_settings: dict[str, dict[str, tuple[str, str]]] = {}
+    fixtures: dict[str, dict[str, Counter[str]]] = {}
+    pass_counts: dict[str, dict[str, Counter[str]]] = {}
+    for label in labels:
+        report = calibrate_receipts(wrapped[label], profiles)
+        reports[label] = {**report, "phase_breakdown": {
+            "available": False,
+            "reason": "workflow samples contain no validated runtime events for phase accounting"}}
+        initial_settings[label] = _initial_settings(raw_samples[label], profiles, label)
+        fixtures[label] = {profile: Counter(row["fixture"] for row in raw_samples[label] if row["profile"] == profile)
+                           for profile in profiles}
+        pass_counts[label] = {profile: Counter(row["fixture"] for row in raw_samples[label]
+                                               if row["profile"] == profile and row["passed"])
+                              for profile in profiles}
+
+    for label in labels:
+        for profile in profiles:
+            if fixtures[label][profile] != fixtures[baseline][profile]:
+                raise ValueError("each variant and profile must cover the same fixture multiset")
+            if initial_settings[label][profile] != initial_settings[baseline][profile]:
+                raise ValueError("initial requested settings must match between variants for each profile")
+
+    baseline_metrics = _comparison_metrics(reports[baseline], profiles)
+    comparisons: dict[str, dict[str, Any]] = {}
+    eligible: list[tuple[int, str]] = []
+    for candidate in labels:
+        if candidate == baseline:
+            continue
+        candidate_metrics = _comparison_metrics(reports[candidate], profiles)
+        fixture_rows: dict[str, list[dict[str, Any]]] = {}
+        regressions: list[dict[str, Any]] = []
+        for profile in profiles:
+            fixture_rows[profile] = []
+            for fixture in sorted(fixtures[baseline][profile]):
+                baseline_passes = pass_counts[baseline][profile][fixture]
+                candidate_passes = pass_counts[candidate][profile][fixture]
+                item = {"fixture_fingerprint": fixture, "baseline_pass_count": baseline_passes,
+                        "candidate_pass_count": candidate_passes,
+                        "quality_regression": candidate_passes < baseline_passes}
+                fixture_rows[profile].append(item)
+                if item["quality_regression"]:
+                    regressions.append({"profile": profile, **item})
+        quality_preserved = not regressions
+        usage_unknown = (not baseline_metrics["all_attempt_usage_complete"] or
+                         not candidate_metrics["all_attempt_usage_complete"] or
+                         any(baseline_metrics[name] is None or candidate_metrics[name] is None for name in _COUNTERS))
+        baseline_total = baseline_metrics["total_tokens"]
+        candidate_total = candidate_metrics["total_tokens"]
+        delta = None if baseline_total is None or candidate_total is None else candidate_total - baseline_total
+        percent = None if delta is None or baseline_total == 0 else 100 * delta / baseline_total
+        all_candidate_passes = candidate_metrics["quality_pass_count"] == candidate_metrics["sample_count"]
+        comparison = {"baseline": baseline, "candidate": candidate,
+                      "baseline_metrics": baseline_metrics, "candidate_metrics": candidate_metrics,
+                      "per_profile_fixture": fixture_rows, "quality_regressions": regressions,
+                      "quality_preserved": quality_preserved, "all_candidate_passes": all_candidate_passes,
+                      "usage_unknown": usage_unknown,
+                      "baseline_observed_total_tokens": baseline_total,
+                      "candidate_observed_total_tokens": candidate_total,
+                      "observed_total_tokens_delta": delta,
+                      "observed_total_tokens_percent_change": percent,
+                      "savings_declared": False}
+        if quality_preserved and all_candidate_passes and not usage_unknown and delta is not None and delta < 0:
+            comparison["savings_declared"] = True
+            eligible.append((candidate_total, candidate))
+        comparisons[candidate] = comparison
+    eligible.sort(key=lambda item: (item[0], labels.index(item[1])))
+    recommendation = None if not eligible else {
+        "variant": eligible[0][1], "baseline": baseline,
+        "basis": "all candidate samples passed, no per-profile fixture quality regression, and complete observed usage showed lower total tokens",
+        "non_binding": True}
+    return {"baseline": baseline, "variants": reports, "comparisons": comparisons,
+            "recommendation": recommendation, "automatic_config_rewrite": False,
+            "root_model_switch": False,
+            "comparison_scope": "descriptive finite-corpus comparison; no statistical guarantee"}

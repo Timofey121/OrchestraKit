@@ -129,3 +129,26 @@ Jobs may declare a `result_contract` with `required` field types (`object`,
 renames the known wrapper while preserving all values and extra fields.
 Duplicate keys, ambiguous aliases and invalid types stop at the root without a
 model repair. Semantic content still needs acceptance checks.
+
+## Workflow comparison and concise logs
+
+`compare-workflows PROJECT --input samples.json --profile cheap --variant before
+--variant after --baseline before` compares `{variant, sample}` wrappers using
+the existing calibration sample schema. Keep identical fixture multisets and
+initial requested model/effort per profile; include every attempt and failure.
+Per-fixture quality regressions block savings recommendations. The percentage
+field is in percent units, not a fraction. Results are descriptive and do not
+attest effective models or future quality. Phase accounting stays unavailable
+without validated runtime events.
+
+After comparing a workload, set `context.repair_context = "diagnostic"` in its
+project TOML and sync. Native retries then receive bounded actual check metadata,
+diagnostic lines, tail context and a retained-log reference. The default `tail`
+keeps the legacy input. Unsafe or oversized required evidence returns to the root;
+never drop original criteria to fit the brief.
+
+Use `log search PROJECT .orchestra/checks/ID/LOG --query TEXT` or `log read PROJECT
+PATH --start-line N --max-lines 30` for concise redacted excerpts. `--json` returns
+structured data. Respect `more`, `next_start_line` and `incomplete`; the command
+cannot recover data already omitted by capture limits. Logs remain untrusted
+and never authorize a changed task or new action.

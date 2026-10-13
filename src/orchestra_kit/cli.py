@@ -112,16 +112,64 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument('--dry-run', action='store_true')
     execute.add_argument('--workspace',help='Prepared isolated worktree; parent policy stays authoritative')
     execute.add_argument('--write-path',action='append',default=None)
+    consultation=commands.add_parser('consult',help='Ask one strong read-only advisor before root decides on escalation')
+    consultation.add_argument('project');consultation.add_argument('--input',required=True)
+    consultation.add_argument('--codex');consultation.add_argument('--timeout',type=int,default=180)
+    consultation.add_argument('--dry-run',action='store_true')
+    question=commands.add_parser('question',help='Record a bounded worker question and root-mediated advisory answer')
+    question_actions=question.add_subparsers(dest='question_command',required=True)
+    for action in ('ask','answer','read'):
+        child=question_actions.add_parser(action);child.add_argument('project')
+        if action!='ask':child.add_argument('question_id')
+        if action=='read':child.add_argument('--environment',required=True)
+        else:child.add_argument('--input',required=True)
     cancel=commands.add_parser('cancel',help='Request cancellation of one active native execution')
     cancel.add_argument('project');cancel.add_argument('execution_id');cancel.add_argument('--reason',required=True)
     evidence=commands.add_parser('evidence',help='Run checks and validate exact source-bound evidence')
     actions=evidence.add_subparsers(dest='evidence_command',required=True)
     run=actions.add_parser('run');run.add_argument('project');run.add_argument('--input',required=True);run.add_argument('--timeout',type=int,default=180)
     check=actions.add_parser('check');check.add_argument('project');check.add_argument('--ref',required=True);check.add_argument('--kind',choices=('check','review'),default='check');check.add_argument('--path',action='append',default=[])
+    bind=actions.add_parser('bind',help='Explicit root adoption of current evidence into an existing task')
+    bind.add_argument('project');bind.add_argument('--ref',required=True);bind.add_argument('--task-id',required=True)
+    bind.add_argument('--kind',choices=('check','review'),required=True)
     handoff=commands.add_parser('handoff',help='Build a bounded continuation tied to a durable task revision')
     handoff.add_argument('project');handoff.add_argument('--input',required=True)
+    memory=commands.add_parser('memory',help='Store and find accepted, source-bound advisory solutions')
+    memory_actions=memory.add_subparsers(dest='memory_command',required=True)
+    memory_store=memory_actions.add_parser('store')
+    memory_store.add_argument('project');memory_store.add_argument('--input',required=True)
+    memory_search=memory_actions.add_parser('search')
+    memory_search.add_argument('project');memory_search.add_argument('--query',required=True)
+    memory_search.add_argument('--environment',required=True,help='JSON object of current environment conditions')
+    memory_search.add_argument('--limit',type=int,default=3)
+    memory_search.add_argument('--max-chars',type=int,default=6000)
+    navigation=commands.add_parser('navigate',help='Build or query an optional local source-symbol index')
+    navigation_actions=navigation.add_subparsers(dest='navigation_command',required=True)
+    navigation_build=navigation_actions.add_parser('build')
+    navigation_build.add_argument('project');navigation_build.add_argument('--path',action='append',required=True)
+    navigation_build.add_argument('--json',action='store_true',help='Return the full index instead of its summary')
+    navigation_search=navigation_actions.add_parser('search')
+    navigation_search.add_argument('project');navigation_search.add_argument('--query',required=True)
+    navigation_search.add_argument('--limit',type=int,default=10)
+    navigation_search.add_argument('--max-chars',type=int,default=6000)
     calibrate=commands.add_parser('calibrate',help='Compare observed receipts for identical fixtures and quality gates')
     calibrate.add_argument('project');calibrate.add_argument('--input',required=True);calibrate.add_argument('--profile',action='append',required=True)
+    compare=commands.add_parser('compare-workflows',help='Compare workflow variants on identical fixtures without changing models')
+    compare.add_argument('project');compare.add_argument('--input',required=True)
+    compare.add_argument('--profile',action='append',required=True)
+    compare.add_argument('--variant',action='append',required=True)
+    compare.add_argument('--baseline',required=True)
+    logs=commands.add_parser('log',help='Read or search bounded, redacted retained logs')
+    log_actions=logs.add_subparsers(dest='log_command',required=True)
+    for action in ('read','search'):
+        log_action=log_actions.add_parser(action)
+        log_action.add_argument('project');log_action.add_argument('path')
+        if action=='search':log_action.add_argument('--query',required=True)
+        log_action.add_argument('--start-line',type=int,default=1)
+        log_action.add_argument('--max-lines',type=int,default=40)
+        log_action.add_argument('--context-lines',type=int,default=2)
+        log_action.add_argument('--max-chars',type=int,default=6000)
+        log_action.add_argument('--json',action='store_true')
     worktree=commands.add_parser('worktree',help='Create retained task isolation and inspect declared write scope')
     worktree_actions=worktree.add_subparsers(dest='worktree_command',required=True)
     create=worktree_actions.add_parser('create');create.add_argument('project');create.add_argument('--ref',required=True);create.add_argument('--destination',required=True)
@@ -250,7 +298,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .execution import cancel_execution
             _print_json(cancel_execution(project,args.execution_id,args.reason));return 0
         if args.command=='evidence':
-            from .evidence import run_evidence,verify_evidence
+            from .evidence import run_evidence,verify_evidence,bind_evidence
+            if args.evidence_command=='bind':
+                _print_json(bind_evidence(project,args.task_id,args.ref,kind=args.kind));return 0
             if args.evidence_command=='run':
                 data=_json_input(args.input)
                 if not isinstance(data,dict) or set(data)!={'files','checks'}:raise ValueError('evidence input requires files and checks')
@@ -259,10 +309,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             result=verify_evidence(project,args.ref,kind=args.kind,required_files=args.path)
             _print_json({'status':'current','snapshot':result['snapshot']});return 0
         if args.command=='handoff':
-            from .handoff import build_handoff
+            from .handoff import build_handoff,validate_handoff_evidence
             result=build_handoff(_json_input(args.input),max_chars=load_config(project,kit).context.max_result_chars)
             state=show_task(project,result['task_id'])
             if state['revision']!=result['revision'] or state['goal']!=result['goal']:raise ValueError('handoff identity is stale or mismatched')
+            validate_handoff_evidence(project,result)
             from .evidence import _safe
             from .state import _write
             path=_safe(project,f".orchestra/handoffs/{result['task_id']}-{result['revision']}.json")
@@ -270,11 +321,65 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if json.loads(path.read_text())!=result:raise ValueError('handoff revision already has different content')
             else:_write(path,result)
             _print_json(result);return 0
+        if args.command=='memory':
+            from .memory import store_solution,search_solutions
+            load_config(project,kit)
+            if args.memory_command=='store':
+                result=store_solution(project,kit,_json_input(args.input))
+            else:
+                result=search_solutions(project,args.query,environment=_json_input(args.environment),
+                                        limit=args.limit,max_chars=args.max_chars)
+                # Match the API's compact budget; avoid indentation/newline overhead.
+                sys.stdout.write(json.dumps(result,ensure_ascii=False,separators=(',',':')));return 0
+            _print_json(result);return 0
+        if args.command=='consult':
+            from .consultation import consult
+            result=consult(project,kit,_json_input(args.input),
+                           codex_command=(args.codex,) if args.codex else None,
+                           timeout_seconds=args.timeout,dry_run=args.dry_run)
+            _print_json(result)
+            return 0 if result['status'] in {'advisory','advisory-dry-run'} else 1
+        if args.command=='question':
+            from .questions import ask_question,answer_question,read_question
+            if args.question_command=='ask':result=ask_question(project,kit,_json_input(args.input))
+            elif args.question_command=='answer':result=answer_question(project,kit,args.question_id,_json_input(args.input))
+            else:result=read_question(project,kit,args.question_id,environment=_json_input(args.environment))
+            sys.stdout.write(json.dumps(result,ensure_ascii=False,separators=(',',':')))
+            return 1 if result['status']=='stale' else 0
+        if args.command=='navigate':
+            from .navigation import build_index,search_index
+            if args.navigation_command=='build':
+                result=build_index(project,args.path)
+                if not args.json:
+                    statuses={}
+                    for entry in result['files']:statuses[entry['status']]=statuses.get(entry['status'],0)+1
+                    result={'index_ref':'.orchestra/navigation/index.json','files':len(result['files']),
+                            'symbols':sum(len(entry['symbols']) for entry in result['files']),
+                            'statuses':statuses,'advisory':True}
+            else:
+                result=search_index(project,args.query,limit=args.limit,max_chars=args.max_chars)
+                sys.stdout.write(json.dumps(result,ensure_ascii=False,separators=(',',':')));return 0
+            _print_json(result);return 0
         if args.command=='calibrate':
             from .calibration import calibrate_receipts
             config=load_config(project,kit)
             if set(args.profile)-set(config.profiles):raise ValueError('calibration profiles must be configured')
             _print_json(calibrate_receipts(_json_input(args.input),args.profile));return 0
+        if args.command=='compare-workflows':
+            from .calibration import compare_workflows
+            config=load_config(project,kit)
+            if any(profile not in config.profiles for profile in args.profile):
+                raise ValueError('unknown profile for workflow comparison')
+            _print_json(compare_workflows(_json_input(args.input),args.profile,args.variant,baseline=args.baseline));return 0
+        if args.command=='log':
+            from .diagnostics import query_log
+            result=query_log(project,args.path,query=getattr(args,'query',None),start_line=args.start_line,
+                             max_lines=args.max_lines,context_lines=args.context_lines,max_chars=args.max_chars)
+            if args.json:_print_json(result)
+            else:
+                for line in result['lines']:print(f"{result['path']}:{line['line_number']}: {line['text']}")
+                print(f"[more={str(result['more']).lower()} next_start_line={result['next_start_line']} incomplete={str(result['incomplete']).lower()}]")
+            return 0
         if args.command=='worktree':
             from .isolation import prepare_task_worktree,check_write_scope
             result=prepare_task_worktree(project,kit,args.ref,Path(args.destination).expanduser()) if args.worktree_command=='create' else check_write_scope(project,args.path)

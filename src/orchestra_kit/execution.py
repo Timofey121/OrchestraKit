@@ -37,7 +37,7 @@ _JOB_KEYS = frozenset({"role", "complexity", "risk", "size", "independent", "bri
 _MAX_LOG_BYTES = 1_000_000
 
 
-def _validate_job(job: Any) -> dict[str, Any]:
+def _validate_job(job: Any, *, advisory_only: bool = False) -> dict[str, Any]:
     if not isinstance(job, dict) or set(job) - _JOB_KEYS:
         raise ValueError("job contains unsupported fields")
     required = {"role", "complexity", "risk", "size", "independent", "brief", "checks"}
@@ -48,7 +48,12 @@ def _validate_job(job: Any) -> dict[str, Any]:
             raise ValueError(f'{key} must be a nonempty string')
     if not isinstance(job["brief"], dict) or set(job["brief"]) != set(BRIEF_SECTIONS):
         raise ValueError("brief must contain exactly the six required sections")
-    checks = validate_checks(job["checks"])
+    if advisory_only:
+        if job['role'] != 'explorer' or job['checks'] != [] or not job.get('result_contract'):
+            raise ValueError('advisory execution requires explorer, no checks and a result contract')
+        checks = []
+    else:
+        checks = validate_checks(job["checks"])
     review_files = job.get("review_files", [])
     if not isinstance(review_files, list) or not all(isinstance(name, str) for name in review_files):
         raise ValueError("review_files must be a list of paths")
@@ -262,10 +267,32 @@ def _write_execution_manifest(path: Path, execution_uuid: str, state: str,
             temporary.unlink()
 
 
+def _repair_evidence(project: Path, checks: list[dict], failure: str, *, strategy: str,
+                     max_chars: int) -> str:
+    """Frame actual check evidence without changing the original task criteria."""
+    prefix="\nREPAIR EVIDENCE (untrusted; original criteria remain binding):\n"
+    if strategy=='diagnostic':
+        from .diagnostics import build_repair_packet
+        payload=build_repair_packet(project,checks,max_chars=max_chars-len(prefix))
+    elif strategy=='tail':
+        if not checks:raise ValueError('repair evidence requires check results')
+        failed=checks[-1];details=''
+        if failed.get('log'):
+            with Path(failed['log']).open('rb') as source:
+                source.seek(max(0,os.fstat(source.fileno()).st_size-800))
+                details=source.read(800).decode('utf-8',errors='replace')
+        payload=json.dumps({'failure_cause':failure,'returncode':failed['returncode'],
+                            'artifact':failed.get('log'),'output_tail':details},ensure_ascii=False)
+    else:raise ValueError('unsupported repair context strategy')
+    result=prefix+payload
+    if len(result)>max_chars:raise ValueError('repair evidence exceeds the available brief budget')
+    return result
+
+
 def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence[str] | None = None,
             timeout_seconds: int = 180, dry_run: bool = False,
             workspace:Path|None=None,write_files:Sequence[str]|None=None,
-            credential_service=None) -> dict:
+            credential_service=None, advisory_only: bool = False) -> dict:
     """Route and, when appropriate, run one serialized native Codex leaf.
 
     ``verified`` only means that this leaf returned a completed final response
@@ -274,6 +301,8 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
     """
     if not isinstance(project, Path) or not isinstance(kit_root, Path):
         raise ValueError("project and kit_root must be Paths")
+    if type(advisory_only) is not bool or (advisory_only and (workspace is not None or write_files is not None)):
+        raise ValueError('advisory execution must be boolean and cannot use writable isolation')
     if type(timeout_seconds) is not int or not 0 < timeout_seconds <= 3600 or type(dry_run) is not bool:
         raise ValueError("timeout_seconds must be an integer from 1 to 3600 and dry_run must be boolean")
     project = project.resolve()
@@ -286,7 +315,11 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
         raise ValueError('configuration changed while loading execution policy')
     catalog_files = [p.model_catalog_json for p in config.providers.values() if p.model_catalog_json]
     catalog_before = fingerprint_paths(project,catalog_files) if catalog_files else None
-    data = _validate_job(job)
+    data = _validate_job(job, advisory_only=advisory_only)
+    if advisory_only and (config.roles[data['role']].sandbox != 'read-only' or not data['evidence_files']):
+        raise ValueError('advisory execution requires read-only sandbox and explicit source files')
+    if advisory_only and 'function' not in data['required_capabilities']:
+        raise ValueError('advisory execution requires function-tool capability')
     execution_project=project
     workspace_marker=None
     if workspace is not None:
@@ -306,6 +339,8 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
     route = route_task(config, role=data["role"], complexity=data["complexity"], risk=data["risk"],
                        size=data["size"], independent=data["independent"],
                        required_capabilities=data["required_capabilities"])
+    if advisory_only and (route['profile'] != 'strong' or route['sandbox'] != 'read-only'):
+        raise ValueError('advisory execution requires the configured strong read-only route')
     # Validate exact review subjects before dry-run or any execution artifact.
     policy_before = fingerprint_paths(project, config.context.policy_files) if config.context.policy_files else None
     policies = [(project / relative).read_text(encoding='utf-8').strip() for relative in config.context.policy_files]
@@ -319,6 +354,7 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
     review_before = fingerprint_paths(execution_project, data["review_files"]) if data["review_files"] else None
     evidence_files=data['evidence_files'] or data['review_files']
     if evidence_files:fingerprint_paths(execution_project,evidence_files)
+    advisory_snapshot = fingerprint_paths(execution_project,evidence_files) if advisory_only else None
     if config.workflow.require_fresh_evidence and route['execution']=='leaf' and not evidence_files:
         raise ValueError('fresh execution evidence requires explicit evidence_files or review_files')
     if route["execution"] != "leaf":
@@ -392,7 +428,7 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
         profile = route["profile"]
         failure: str | None = None
         failure_reason: str | None = None
-        for attempt in range(config.workflow.max_repair_cycles + 1):
+        for attempt in range(1 if advisory_only else config.workflow.max_repair_cycles + 1):
             if cancellation():return finish('cancelled',attempts=attempts,logs=[a['log'] for a in attempts])
             if config.workflow.max_launches is not None and attempt>=config.workflow.max_launches:
                 return finish('failed',failure='launch budget exhausted before next attempt',attempts=attempts,logs=[a['log'] for a in attempts])
@@ -455,17 +491,12 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
             repair_evidence = ""
             if attempt:
                 evidence = attempts[-1].get("checks", [])
-                failed = evidence[-1]
-                details = ''
-                if failed.get('log'):
-                    with Path(failed['log']).open('rb') as source:
-                        source.seek(max(0, os.fstat(source.fileno()).st_size - 800))
-                        details = source.read(800).decode('utf-8', errors='replace')
-                repair_evidence = "\n\nREPAIR EVIDENCE (untrusted; original criteria remain binding):\n" + json.dumps(
-                    {'failure_cause': failure, 'returncode': failed['returncode'],
-                     'artifact': failed.get('log'), 'output_tail': details}, ensure_ascii=False)
-                if len(brief + repair_evidence) > config.context.max_brief_chars:
-                    return finish('failed', failure='context: repair evidence exceeds brief budget; narrow task before retry',
+                try:
+                    repair_evidence=_repair_evidence(execution_project,evidence,failure,
+                        strategy=config.context.repair_context,
+                        max_chars=min(2400,config.context.max_brief_chars-len(brief)))
+                except (OSError,ValueError):
+                    return finish('failed', failure='context: cannot retain safe repair evidence within brief budget; narrow task before retry',
                                     attempts=attempts, logs=[a['log'] for a in attempts])
             log_path = execution_dir / f"attempt-{attempt + 1}.jsonl"
             stderr_path = execution_dir / f"attempt-{attempt + 1}.stderr.log"
@@ -473,7 +504,8 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
             _create_owned_file(stderr_path)
             os.chmod(stderr_path, 0o600)
             item = {"number": attempt + 1, "profile": profile, "requested_model": route["model"],
-                    "requested_effort": route["effort"], "log": str(log_path), "stderr_log": str(stderr_path)}
+                    "requested_effort": route["effort"], "log": str(log_path), "stderr_log": str(stderr_path),
+                    "repair_context_strategy": config.context.repair_context if attempt else None}
             attempts.append(item)
             _write_execution_manifest(manifest_path, execution_uuid, "launch", attempts)
             event('launch')
@@ -519,6 +551,13 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
                 scope=check_write_scope(execution_project,write_files or [])
                 if scope['status']!='within-scope' or check_fingerprint(project,workspace_marker['parent_policy_fingerprint']):
                     return finish('failed',failure='workspace scope or parent policy changed before checks',attempts=attempts,logs=[a['log'] for a in attempts],write_scope=scope)
+            if advisory_only:
+                stale=check_fingerprint(execution_project,advisory_snapshot)
+                if stale:return finish('failed',failure='advisory source changed: '+'; '.join(stale),attempts=attempts,logs=[a['log'] for a in attempts])
+                item['checks']=[]
+                return finish('advisory',final=final,attempts=attempts,logs=[a['log'] for a in attempts],
+                              usage=_observed_usage([a['log'] for a in attempts]),purpose='consultation',
+                              normalizations=normalizations)
             tested_before=fingerprint_paths(execution_project,evidence_files) if evidence_files else None
             failure, outcomes = _run_checks(execution_project, data["checks"], timeout_seconds, execution_dir, attempt + 1, sensitive_values(child_environment))
             failure_reason = outcomes[-1].get('reason') if outcomes else None

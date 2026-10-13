@@ -241,6 +241,7 @@ Increasing profile order: {', '.join(f'`{p}`' for p in config.routing.profile_or
 Brief limit: `{config.context.max_brief_chars}` characters.
 Result limit: `{config.context.max_result_chars}` characters.
 Native leaf skill-catalog limit: `{config.context.max_skill_catalog_tokens}` tokens.
+Native retry evidence mode: `{config.context.repair_context}`.
 
 Use the installed `orchestra` skill's bundled launcher, or `bin/orchestra` from
 an available kit checkout. All commands below follow that launcher:

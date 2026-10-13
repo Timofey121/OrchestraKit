@@ -3,7 +3,7 @@
   "files": {
     ".agents/skills/orchestrate-project/SKILL.md": "04fb505d6f58513bad362d05ee194035abef091e2f42df0cda760abb3a0c881e",
     ".agents/skills/orchestrate-project/agents/openai.yaml": "20cf8055bce4ca8235186e89a1a746bfd10056301c28734de1974322f122d2a4",
-    ".agents/skills/orchestrate-project/references/execution-contract.md": "21866173b6ac509b677fe560f43ab88e55946156180213d13ea56217cd45ad7e",
+    ".agents/skills/orchestrate-project/references/execution-contract.md": "d318bac3e85a50b701b42b8493b9ed190184164b14a823770f04ce09a1233287",
     ".codex/agents/orchestra-explorer--balanced.toml": "e4c972f8cf45ce820b2596734063af8660c00785774a54880197ed33e312b6e0",
     ".codex/agents/orchestra-explorer--critical.toml": "5cc50e5cae7e9e22eddb77a33bcc8183cdcec162a162f20c82a2004cfbc754c0",
     ".codex/agents/orchestra-explorer--strong.toml": "67702ecba3c86ec7f890182d81d19764ba2cdc0edf5520952858840c241c2d80",

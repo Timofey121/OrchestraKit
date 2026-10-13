@@ -66,3 +66,21 @@ The revision and cumulative metrics still cover all accepted updates. If the
 current state alone exceeds the limit, admission refuses the update without
 changing the saved file. Link detailed artifacts instead of embedding large
 reports. This byte limit also applies when context character budgets are raised.
+
+## Decisions for continuation
+
+An existing `handoff` may add `decisions` ({text, reason}), `verified_facts`
+({text, reason, evidence_ref}) and `rejected_approaches`
+({text, reason, artifact_ref}). Keep statements concise. The CLI verifies current
+source-bound passing check evidence for facts and safe, retained attempt artifacts
+for rejected approaches. Evidence does not establish a statement's semantic
+meaning; the root must inspect it. Reconsider a rejected approach when new facts
+warrant it. These records never extend authority or replace constraints.
+
+For accepted-solution memory, root-owned evidence must identify the task UUID.
+After inspecting independent execution/review evidence, root may explicitly
+adopt it with `evidence bind PROJECT --ref REF --kind check|review --task-id UUID`
+before recording completion. This rechecks and copies the certificate's current
+source, check and report bindings under task ownership; original certificates
+remain intact. It cannot promote check evidence to PASS review. Ownership is a
+local assertion, not proof of reviewer independence; root must establish that.

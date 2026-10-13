@@ -45,7 +45,7 @@ class DistributionTests(unittest.TestCase):
             root=Path(directory);source=root/'source';source.mkdir()
             for name in ['src','templates','skills','bin','frontend','tests','.github']:
                 shutil.copytree(KIT/name,source/name,ignore=shutil.ignore_patterns('__pycache__','*.egg-info','node_modules'))
-            for name in ['README.md','CONTRIBUTING.md','LICENSE','DESIGN.md','pyproject.toml','setup.py','MANIFEST.in','docs/getting-started.md','docs/local-dashboard.md','docs/project-config.md','docs/hooks-and-orchestration.md','docs/architecture.md','docs/features.md','docs/providers/deepseek.md']:
+            for name in ['README.md','CONTRIBUTING.md','LICENSE','DESIGN.md','pyproject.toml','setup.py','MANIFEST.in','docs/getting-started.md','docs/local-dashboard.md','docs/project-config.md','docs/hooks-and-orchestration.md','docs/architecture.md','docs/features.md','docs/providers/deepseek.md','docs/workflow-comparison.md','docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md']:
                 target=source/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(KIT/name,target)
             result=subprocess.run([sys.executable,'setup.py','sdist','--dist-dir',str(root/'dist')],cwd=source,text=True,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
@@ -59,7 +59,7 @@ class DistributionTests(unittest.TestCase):
                         path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(archive.extractfile(member).read());path.chmod(member.mode)
                     else:self.fail('unexpected archive link or special file')
             received=next(unpacked.iterdir())
-            for relative in ['docs/getting-started.md', 'docs/architecture.md', 'docs/features.md', 'LICENSE', 'CONTRIBUTING.md', 'tests/test_execution.py', '.github/pull_request_template.md']:
+            for relative in ['docs/getting-started.md', 'docs/architecture.md', 'docs/features.md', 'docs/workflow-comparison.md', 'docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md', 'LICENSE', 'CONTRIBUTING.md', 'tests/test_execution.py', '.github/pull_request_template.md']:
                 self.assertTrue((received/relative).is_file(), relative)
             self.assertFalse((received/'.orchestra/archive').exists())
             self.assertFalse((received/'.idea').exists())

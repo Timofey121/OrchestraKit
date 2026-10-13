@@ -98,6 +98,16 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(overview["totals"]["projects"], 2)
         self.assertEqual({chat["project_id"] for chat in overview["chats"]}, {project["id"] for project in overview["projects"]})
 
+    def test_completed_advice_is_not_counted_as_running_execution(self) -> None:
+        task_id = '11111111-1111-1111-1111-111111111111'
+        self._task_for_chat(task_id, 'chat-a', 'completed')
+        self._threads()
+        self._execution_for_task('consultation', task_id, 'terminal')
+        path = self.project / '.orchestra/executions/consultation/run.json'
+        data = json.loads(path.read_text()); data['status'] = 'advisory'; path.write_text(json.dumps(data))
+        overview = self.dashboard().snapshot()
+        self.assertEqual(overview['projects'][0]['counts']['nonterminal_executions'], 0)
+
     def test_chat_filter_uses_only_explicit_task_and_execution_ids(self) -> None:
         first_task = "11111111-1111-1111-1111-111111111111"
         second_task = "22222222-2222-2222-2222-222222222222"

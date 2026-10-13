@@ -11,6 +11,8 @@ import {House,Search,FolderOpen,MessageCircle,Activity,ChartNoAxesColumn,Setting
 const labels={planned:'Запланировано',running:'В работе',blocked:'Нужна помощь',completed:'Завершено',verified:'Проверки пройдены',failed:'Ошибка',cancelled:'Отменено',unknown:'Состояние неизвестно',archived:'В архиве',idle:'Ответ завершён',stopped:'Остановлено',launch:'Выполняется',checks:'Проверяется','leaf-complete':'Ответ получен','checks-complete':'Проверки завершены',terminal:'Завершён',waiting:'Ожидает',ready:'Готово к запуску',current:'Актуальны',stale:'Нужна новая проверка',unbound:'Нет привязанных проверок',pass:'Пройдено',fail:'Не пройдено',skipped:'Пропущено'};
 const phases={launch:'Начало попытки','leaf-complete':'Получен ответ','checks-complete':'Проверки завершены',terminal:'Запуск завершён',checks:'Начало проверок',verified:'Проверки пройдены',failed:'Ошибка запуска',cancelled:'Запуск отменён'};
 const profiles={cheap:'Начальный',balanced:'Основной',strong:'Сильный',critical:'Максимальный'};
+labels.advisory='Совет получен';
+phases.advisory='Консультация завершена';
 const pages=[['overview','Обзор',House],['projects','Проекты',FolderOpen],['chats','Чаты',MessageCircle],['executions','Исполнители',Activity],['usage','Расход токенов',ChartNoAxesColumn],['settings','Модели и подключения',Settings2],['help','Помощь',CircleHelp]];
 const num=n=>Number.isFinite(n)&&n>=0?new Intl.NumberFormat('ru-RU').format(n):'—';
 const compact=n=>Number.isFinite(n)&&n>=0?new Intl.NumberFormat('ru-RU',{notation:'compact',maximumFractionDigits:1}).format(n):'—';

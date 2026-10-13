@@ -30,3 +30,10 @@ agent or billable event was captured. Partial logs produce warnings. Compare
 equivalent completed tasks with identical prompt, starting files, root model,
 effort and host. Record failures and retries too. An automatically selected skill
 is behavioral evidence; it does not by itself prove lower token consumption.
+
+For before/after workflow measurements, `compare-workflows` accepts `{variant,
+sample}` wrappers around the calibration sample format. Preserve task, source,
+criteria and initial requested settings; count all attempts, including failures.
+The comparison does not execute models or verify supplied quality judgments.
+Use independent checks/review first; incomplete observations cannot support a
+savings recommendation. See [reliability](reliability.md) for the command.

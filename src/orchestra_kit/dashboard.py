@@ -737,7 +737,7 @@ class Dashboard:
         queue = self._queue(path, warnings)
         project_id = self._project_id(path)
         project_chats = [chat for chat in chats if chat["project_id"] == project_id]
-        terminal_execution_states = {"verified", "failed", "completed", "complete", "terminal", "stopped", "cancelled", "canceled", "aborted"}
+        terminal_execution_states = {"verified", "advisory", "failed", "completed", "complete", "terminal", "stopped", "cancelled", "canceled", "aborted"}
         def nonterminal_execution(item: dict[str, Any]) -> bool:
             status = str(item.get("status") or item.get("phase") or "").lower()
             return bool(status) and status not in terminal_execution_states

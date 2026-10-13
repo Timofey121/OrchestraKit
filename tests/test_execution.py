@@ -97,6 +97,43 @@ class ExecutionTests(unittest.TestCase):
         log = Path(receipt["logs"][0])
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
 
+    def test_advisory_execution_is_read_only_single_call_without_check_or_certificate(self) -> None:
+        (self.project / 'source.py').write_text('value = 1\n')
+        self.cli.write_text("import json\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'hypotheses':['wrong field'],'next_checks':['read schema']})}}))\nprint(json.dumps({'type':'turn.completed'}))\n")
+        job = self.job(role='explorer', complexity='complex', risk='high', checks=[],
+                       evidence_files=['source.py'],
+                       required_capabilities=['function'],
+                       result_contract={'required': {'hypotheses': 'array', 'next_checks': 'array'}, 'aliases': {}})
+        with patch.object(self.execution, '_run_checks', side_effect=AssertionError('Advice must not run checks')):
+            result = self.execute(job, advisory_only=True)
+        self.assertEqual(result['status'], 'advisory')
+        self.assertEqual(len(result['attempts']), 1)
+        self.assertIsNone(result['evidence_ref'])
+        self.assertEqual(result['attempts'][0]['checks'], [])
+        manifest = json.loads(Path(result['manifests'][0]).read_text())
+        self.assertEqual(manifest['state'], 'terminal')
+        self.assertEqual(manifest['status'], 'advisory')
+        self.assertEqual(len(manifest['attempts']), 1)
+        self.assertEqual(manifest['attempts'][0]['checks'], [])
+        with self.assertRaises(ValueError):
+            self.execute(job)
+        with self.assertRaises(ValueError):
+            self.execute({**job, 'role': 'worker'}, advisory_only=True)
+        with self.assertRaises(ValueError):
+            self.execute({**job, 'checks': [{'argv': ['echo','unsafe'], 'failure_cause':'implementation'}]}, advisory_only=True)
+
+    def test_advisory_rejects_source_mutation_without_retry(self) -> None:
+        (self.project / 'source.py').write_text('value = 1\n')
+        self.cli.write_text("import json,pathlib\npathlib.Path('source.py').write_text('value = 2\\n')\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'hypotheses':['guess'],'next_checks':[]})}}))\nprint(json.dumps({'type':'turn.completed'}))\n")
+        result = self.execute(self.job(role='explorer', complexity='complex', risk='high', checks=[],
+                               evidence_files=['source.py'], required_capabilities=['function'],
+                               result_contract={'required':{'hypotheses':'array','next_checks':'array'},'aliases':{}}),
+                              advisory_only=True)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('source changed', result['failure'])
+        self.assertEqual(len(result['attempts']), 1)
+        self.assertIsNone(result['evidence_ref'])
+
     def test_leaf_marker_is_scoped_to_child_and_preserves_other_environment(self) -> None:
         marker = Path(self.temp.name) / 'marker.json'
         self.cli.write_text(self.cli.read_text().replace("mode = os.environ.get('FAKE_MODE', 'ok')",
@@ -162,6 +199,24 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(row['prompt'].count('ACCEPTANCE CRITERIA'), 1)
             self.assertIn('skills.max_context_tokens=1000', row['args'])
         self.assertIn('EXPECTED_FAILURE_DETAIL', rows[1]['prompt'])
+
+    def test_diagnostic_mode_reaches_native_retry_without_losing_original_goal(self):
+        config=self.project/'.orchestra/project.toml'
+        config.write_text(config.read_text().replace('[context]','[context]\nrepair_context = "diagnostic"'))
+        trace=Path(self.temp.name)/'diagnostic-prompts.jsonl'
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1));\n"+
+            f"with open({str(trace)!r}, 'a') as trace:\n trace.write(json.dumps({{'prompt':sys.stdin.read()}})+'\\n')"))
+        check=[{'argv':[sys.executable,'-c',"print('ValueError: EARLY_DIAGNOSTIC'); print('INFO idle\\n'*500); raise SystemExit(1)"],
+                'failure_cause':'implementation'}]
+        job=self.job(checks=check);job['brief']['GOAL']='UNCHANGED_GOAL'
+        receipt=self.execute(job)
+        rows=[json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertEqual(len(rows),3)
+        self.assertEqual(receipt['attempts'][1]['repair_context_strategy'],'diagnostic')
+        self.assertIn('ValueError: EARLY_DIAGNOSTIC',rows[1]['prompt'])
+        self.assertIn('original_criteria_remain_binding',rows[1]['prompt'])
+        self.assertEqual(rows[1]['prompt'].count('UNCHANGED_GOAL'),1)
 
     def test_mutation_by_check_invalidates_configuration_and_review(self) -> None:
         for subject in ['.orchestra/project.toml', 'reviewed.txt']:

@@ -39,6 +39,8 @@ python3 -m build
 | Задачи, evidence и история | `state.py`, `evidence.py`, `events.py`, `fingerprint.py`, `handoff.py` |
 | Очередь и leases | `queue.py` |
 | Учёт использования и калибровка | `usage.py`, `calibration.py` |
+| Диагностика, память и навигация | `diagnostics.py`, `memory.py`, `navigation.py` |
+| Советы и вопросы через главного агента | `consultation.py`, `questions.py` |
 | Внешние Providers и секреты | `providers.py`, `settings.py` |
 | Панель | `dashboard.py`, `src/orchestra_kit/web/`, `frontend/` |
 | Пользовательский навык и роли | `skills/orchestra/`, `templates/`, `.agents/skills/` в подключённом проекте |
@@ -101,7 +103,13 @@ README и основные руководства написаны по-русс
 Workflow `Checks` запускает Python-тесты, тесты и сборку панели, проверяет
 актуальность готового `app.js` и собирает дистрибутивы. В матрице заданы Linux
 и macOS с Python 3.11 и 3.13. Он не требует ключей моделей и не делает платных
-запросов. Первый запуск на GitHub произойдёт после публикации репозитория.
+запросов. Матрица Windows проверяет переносимые команды; native-исполнение
+на Windows запускают через WSL.
+
+При добавлении функции сверяйте команду CLI, README, `docs/features.md`,
+профильный справочник и инструкции в `skills/orchestra/references`.
+Новые публичные документы включайте в `MANIFEST.in` и тест исходного архива.
+Версия пакета задаётся в `pyproject.toml` и `src/orchestra_kit/__init__.py`.
 
 Используются официальные [checkout](https://github.com/actions/checkout),
 [setup-python](https://github.com/actions/setup-python) и

@@ -20,6 +20,7 @@ git_publication = "human-controlled"
 
 # Optional project-owned Markdown policies, applied in listed order.
 [context]
+repair_context = "diagnostic"
 policy_files = []
 max_brief_chars = 12000
 max_result_chars = 6000

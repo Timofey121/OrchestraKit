@@ -82,3 +82,25 @@ def run_evidence(project,files,checks,*,timeout_seconds=180):
     stale=check_fingerprint(project,snapshot)
     evidence_ref=create_evidence(project,files,outcomes,snapshot=snapshot,owner=directory.name) if failure is None and not stale else None
     return {'status':'verified' if evidence_ref else 'failed','evidence_ref':evidence_ref,'checks':outcomes,'failure':failure or ('; '.join(stale) if stale else None)}
+
+def bind_evidence(project:Path,task_id:str,ref:str,*,kind:str)->dict:
+    """Record root adoption of current evidence without changing its contents.
+
+    Local task ownership is an explicit caller assertion, not proof of reviewer
+    identity. Original source/check/report hashes remain binding.
+    """
+    from .state import show_task
+    task=show_task(project,task_id)
+    if task['status']=='completed':
+        raise ValueError('cannot bind evidence to an already completed task')
+    certificate=verify_evidence(project,ref,kind=kind)
+    files=list(certificate['snapshot']['files'])
+    review=certificate['review_verdict'] if kind=='review' else None
+    report=project/certificate['review_report']['path'] if review else None
+    adopted=create_evidence(project,files,certificate['checks'],owner=task_id,
+                            snapshot=certificate['snapshot'],review_verdict=review,review_report=report)
+    # Recheck original artifacts as well as the new binding before returning it.
+    verify_evidence(project,ref,kind=kind)
+    verify_evidence(project,adopted,kind=kind)
+    return {'evidence_ref':adopted,'adopted_from':ref,'task_id':task_id,
+            'authority':'explicit-local-root-adoption'}

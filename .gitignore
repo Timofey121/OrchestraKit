@@ -21,6 +21,9 @@ orchestra_kit-*/
 .orchestra/evidence/
 .orchestra/executions/
 .orchestra/handoffs/
+.orchestra/memory/
+.orchestra/navigation/
+.orchestra/questions/
 .orchestra/reviews/
 .orchestra/runs/
 .orchestra/presentation-build/
