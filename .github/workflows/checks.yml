@@ -65,4 +65,4 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Installation and dashboard smoke test
-        run: python -m unittest tests.test_portability tests.test_diagnostics tests.test_workflow_comparison tests.test_stage1_cli tests.test_repair_context tests.test_memory tests.test_navigation tests.test_handoff tests.test_stage2_cli tests.test_consultation tests.test_consultation_cli tests.test_questions tests.test_questions_cli -v
+        run: python -m unittest tests.test_portability tests.test_state tests.test_check_portability tests.test_diagnostics tests.test_workflow_comparison tests.test_stage1_cli tests.test_repair_context tests.test_memory tests.test_navigation tests.test_handoff tests.test_stage2_cli tests.test_consultation tests.test_consultation_cli tests.test_questions tests.test_questions_cli -v

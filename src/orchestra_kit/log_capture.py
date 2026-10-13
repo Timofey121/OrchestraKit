@@ -1,6 +1,7 @@
 """Redact known credentials while draining child output into durable artifacts."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import select
@@ -13,6 +14,58 @@ from typing import BinaryIO, Mapping, Sequence
 
 MAX_RETAINED_BYTES = 10 * 1024 * 1024
 TRUNCATION_MARKER = b'\n[ORCHESTRA OUTPUT TRUNCATED]\n'
+
+
+def _is_windows() -> bool:
+    """Return whether the pipe reader uses the Windows API."""
+    return os.name == 'nt'
+
+
+def _pipe_is_closed(error: OSError) -> bool:
+    """Recognize a closed anonymous pipe on supported operating systems."""
+    return error.errno in {errno.EBADF, errno.EPIPE} or getattr(error, 'winerror', None) in {109, 232}
+
+
+def _windows_pipe_available(fd: int) -> int | None:
+    """Return bytes buffered in a Windows anonymous pipe, or None at EOF."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    peek = kernel32.PeekNamedPipe
+    peek.argtypes = (
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    peek.restype = wintypes.BOOL
+    available = wintypes.DWORD()
+    if peek(wintypes.HANDLE(msvcrt.get_osfhandle(fd)), None, 0, None,
+            ctypes.byref(available), None):
+        return int(available.value)
+    error = ctypes.get_last_error()
+    if error in {109, 232}:  # ERROR_BROKEN_PIPE and ERROR_NO_DATA
+        return None
+    raise OSError(error, 'PeekNamedPipe failed')
+
+
+def _readable_bytes(reader: BinaryIO, timeout: float) -> int | None:
+    """Wait briefly for a pipe and return a safe read size; None means EOF."""
+    if not _is_windows():
+        ready, _, _ = select.select([reader], [], [], timeout)
+        return 65536 if ready else 0
+    deadline = time.monotonic() + timeout
+    while True:
+        available = _windows_pipe_available(reader.fileno())
+        if available is None:
+            return None
+        if available:
+            return min(available, 65536)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return 0
+        time.sleep(min(.01, remaining))
 
 
 class CapturedOutput:
@@ -106,12 +159,19 @@ def sanitized_output(path: Path, values: Sequence[str]):
                         stopping_at = stopping_at or time.monotonic() + .2
                         if time.monotonic() >= stopping_at or drained_after_stop >= 1024 * 1024:
                             break
-                    ready, _, _ = select.select([reader], [], [], .1)
-                    if not ready:
+                    available = _readable_bytes(reader, .1)
+                    if available is None:
+                        break
+                    if not available:
                         if stop.is_set():
                             break
                         continue
-                    chunk = os.read(reader.fileno(), 65536)
+                    try:
+                        chunk = os.read(reader.fileno(), available)
+                    except OSError as error:
+                        if _pipe_is_closed(error):
+                            break
+                        raise
                     if not chunk:
                         break
                     if stopping_at is not None:

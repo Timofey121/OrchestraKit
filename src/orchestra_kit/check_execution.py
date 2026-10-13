@@ -14,6 +14,11 @@ from .log_capture import sanitized_output, sensitive_values
 FAILURE_CAUSES = frozenset({"implementation", "context", "capability", "environment"})
 
 
+def _is_windows() -> bool:
+    """Return whether common checks are running under the Windows process API."""
+    return os.name == "nt"
+
+
 def validate_checks(value: Any) -> list[dict[str, Any]]:
     """Validate the public check schema and return a normalized copy."""
     if not isinstance(value, list) or not 1 <= len(value) <= 8:
@@ -34,7 +39,29 @@ def validate_checks(value: Any) -> list[dict[str, Any]]:
 
 
 def _drain(process: subprocess.Popen[Any]) -> None:
-    """Terminate a process group and wait for all retained output handles."""
+    """Terminate a check process and wait for retained output handles."""
+    if _is_windows():
+        # Windows has no POSIX process groups.  A direct child can be terminated
+        # and killed, but descendants that outlive it cannot be safely reaped by
+        # the standard library without risking unrelated processes.
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -96,9 +123,12 @@ def run_checks(project: Path, checks: list[dict[str, Any]], timeout_seconds: int
             path = execution_dir / f"attempt-{attempt}-check-{len(outcomes) + 1}.log"
             create_owned_file(path)
             with sanitized_output(path, tuple(secrets) + sensitive_values()) as output:
+                options: dict[str, Any] = {}
+                if not _is_windows():
+                    options["start_new_session"] = True
                 process = subprocess.Popen(
                     check["argv"], cwd=project, shell=False, stdout=output,
-                    stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                    stderr=subprocess.STDOUT, text=True, **options,
                 )
                 returncode, stopped = communicate(
                     process, None, timeout_seconds, execution_dir / "cancel.json")

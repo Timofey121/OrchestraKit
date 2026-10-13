@@ -53,14 +53,17 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
     if len(content.encode("utf-8")) > MAX_TASK_BYTES:
         raise ValueError("task state exceeds 256 KiB; link detailed artifacts instead")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".orchestra-", delete=False) as handle:
-        temporary = Path(handle.name)
-        try:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, prefix=".orchestra-", delete=False) as handle:
+            temporary = Path(handle.name)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-            temporary.replace(path)
-        finally:
+        # Windows forbids replacement while the temporary handle is open.
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 

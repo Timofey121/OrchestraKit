@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 KIT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,35 @@ class StateTests(unittest.TestCase):
 
     def start(self):
         return self.state.start_task(self.project, KIT, 'Implement a bounded feature')
+
+    def test_atomic_task_writer_closes_temporary_file_before_replacement(self):
+        original_temporary = self.state.tempfile.NamedTemporaryFile
+        original_replace = Path.replace
+        handles = []
+        def track_temporary(*args, **kwargs):
+            handle = original_temporary(*args, **kwargs)
+            handles.append(handle)
+            return handle
+        def replace_closed(source, destination):
+            handle = next(item for item in handles if Path(item.name) == source)
+            self.assertTrue(handle.closed, 'Windows refuses renaming an open temporary file')
+            return original_replace(source, destination)
+        with patch.object(self.state.tempfile, 'NamedTemporaryFile', side_effect=track_temporary), \
+             patch.object(Path, 'replace', replace_closed):
+            task = self.start()
+        saved = self.state.show_task(self.project, task['task_id'])
+        self.assertEqual(saved['goal'], task['goal'])
+        self.assertEqual(list((self.project / '.orchestra/runs').glob('.orchestra-*')), [])
+
+    def test_task_writer_keeps_byte_budget_independent_of_platform_newlines(self):
+        original_temporary = self.state.tempfile.NamedTemporaryFile
+        def windows_newlines(*args, **kwargs):
+            kwargs.setdefault('newline', '\r\n')
+            return original_temporary(*args, **kwargs)
+        with patch.object(self.state.tempfile, 'NamedTemporaryFile', side_effect=windows_newlines):
+            task = self.start()
+        path = self.project / '.orchestra/runs' / (task['task_id'] + '.json')
+        self.assertNotIn(b'\r\n', path.read_bytes())
 
     def evidence(self, status='completed'):
         return {'status': status, 'summary': 'Feature checked', 'completed_steps': ['Implementation'], 'next_steps': [], 'changed_files': ['src/app.py'], 'checks': [{'command': 'python3 -m unittest', 'outcome': 'pass', 'evidence': 'tests pass'}], 'acceptance': [{'criterion': 'Requested behavior works', 'satisfied': True, 'evidence': 'Focused regression check'}], 'reviews': [{'level': 'final', 'verdict': 'PASS', 'evidence': 'Independent final review'}], 'metrics': {'input_tokens': 20, 'output_tokens': 10, 'elapsed_seconds': 1.5, 'cost_usd': 0.001}}
