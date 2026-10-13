@@ -14,6 +14,7 @@ import os
 import stat
 from pathlib import Path
 from typing import Any, Iterable
+from .file_metadata import stat_matches_fstat
 
 
 SCHEMA = 1
@@ -99,7 +100,7 @@ def _state(root: Path, relative: str) -> dict[str, str]:
         raise _UnreadableFile from exc
     try:
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or _metadata(before) != _metadata(opened):
+        if not stat.S_ISREG(opened.st_mode) or not stat_matches_fstat(before, opened):
             raise _UnreadableFile
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, _HASH_BYTES):
@@ -110,7 +111,8 @@ def _state(root: Path, relative: str) -> dict[str, str]:
         raise _UnreadableFile from exc
     finally:
         os.close(descriptor)
-    if not stat.S_ISREG(after.st_mode) or _metadata(before) != _metadata(after_opened) or _metadata(before) != _metadata(after):
+    if (not stat.S_ISREG(after.st_mode) or _metadata(opened) != _metadata(after_opened)
+            or _metadata(before) != _metadata(after) or not stat_matches_fstat(after, after_opened)):
         raise _UnreadableFile
     return {"state": "regular", "sha256": digest.hexdigest()}
 

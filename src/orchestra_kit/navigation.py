@@ -14,6 +14,7 @@ import re
 import stat
 from pathlib import Path
 from typing import Any, Iterable
+from .file_metadata import stat_matches_fstat
 
 from .log_capture import redacted_text, sensitive_values
 
@@ -131,7 +132,7 @@ def _read_source(root: Path, relative: str) -> tuple[str, str] | None:
         raise _Unreadable from exc
     try:
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or _metadata(opened) != _metadata(before):
+        if not stat.S_ISREG(opened.st_mode) or not stat_matches_fstat(before, opened):
             raise _Unreadable
         digest = hashlib.sha256()
         parts: list[bytes] = []
@@ -151,7 +152,8 @@ def _read_source(root: Path, relative: str) -> tuple[str, str] | None:
         raise _Unreadable from exc
     finally:
         os.close(descriptor)
-    if not stat.S_ISREG(after.st_mode) or _metadata(before) != _metadata(after_opened) or _metadata(before) != _metadata(after):
+    if (not stat.S_ISREG(after.st_mode) or _metadata(opened) != _metadata(after_opened)
+            or _metadata(before) != _metadata(after) or not stat_matches_fstat(after, after_opened)):
         raise _Unreadable
     try:
         text = b"".join(parts).decode("utf-8")
@@ -311,7 +313,7 @@ def _load(root: Path, *, required: bool) -> dict[str, Any] | None:
         descriptor = os.open(path, flags)
         try:
             opened = os.fstat(descriptor)
-            if not stat.S_ISREG(opened.st_mode) or _metadata(opened) != _metadata(info):
+            if not stat.S_ISREG(opened.st_mode) or not stat_matches_fstat(info, opened):
                 raise ValueError("navigation index is corrupt")
             chunks: list[bytes] = []
             remaining = MAX_INDEX_BYTES + 1
