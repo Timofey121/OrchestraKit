@@ -20,6 +20,8 @@ orchestra_kit-*/
 .orchestra/checks/
 .orchestra/evidence/
 .orchestra/executions/
+.orchestra/workflows/
+.orchestra/verification-cache/
 .orchestra/handoffs/
 .orchestra/memory/
 .orchestra/navigation/

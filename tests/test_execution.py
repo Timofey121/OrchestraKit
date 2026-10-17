@@ -82,6 +82,18 @@ class ExecutionTests(unittest.TestCase):
             self.project, KIT, job, codex_command=(sys.executable, str(self.cli)), **kwargs
         )
 
+    def test_workflow_can_narrow_attempts_and_seed_cause_aware_recovery(self):
+        r=self.execute(self.job(),max_attempts=1,
+                       recovery={'failure':'implementation','previous_profile':'cheap','attempt':1})
+        self.assertEqual(r['profile'],'balanced')
+        self.assertEqual(len(r['attempts']),1)
+        for cause in ('environment','context','capability'):
+            stopped=self.execute(self.job(),max_attempts=1,
+                                 recovery={'failure':cause,'previous_profile':'cheap','attempt':0})
+            self.assertEqual(stopped['attempts'],[])
+        for limit in (0,True,4):
+            with self.assertRaises(ValueError):self.execute(self.job(),max_attempts=limit)
+
     def set_observed_token_limit(self, limit: int) -> None:
         config = self.project / '.orchestra' / 'project.toml'
         config.write_text((KIT / 'templates' / 'project.toml').read_text().replace(
@@ -96,6 +108,30 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.state.read_text(), "1")
         log = Path(receipt["logs"][0])
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
+    def test_leaf_receives_sandbox_guidance_without_weakening_review_checks(self) -> None:
+        trace = Path(self.temp.name) / 'launch.json'
+        self.cli.write_text(self.cli.read_text().replace(
+            "path.write_text(str(count + 1))",
+            "path.write_text(str(count + 1)); " +
+            f"pathlib.Path({str(trace)!r}).write_text(json.dumps(sys.argv))"))
+        for role in ('reviewer', 'worker'):
+            with self.subTest(role=role):
+                os.environ['FAKE_MODE'] = 'review-pass' if role == 'reviewer' else 'ok'
+                receipt = self.execute(self.job(role=role))
+                self.assertEqual(receipt['status'], 'verified')
+                self.assertEqual(len(receipt['attempts'][0]['checks']), 1)
+                args = json.loads(trace.read_text())
+                instruction = json.loads(next(a.split('=', 1)[1] for a in args
+                                              if a.startswith('developer_instructions=')))
+                if role == 'reviewer':
+                    self.assertEqual(args[args.index('--sandbox') + 1], 'read-only')
+                    self.assertIn('python3 -B -c', instruction)
+                    self.assertIn('heredocs', instruction)
+                    self.assertIn('Never substitute mocks for required checks', instruction)
+                else:
+                    self.assertNotIn('Execution sandbox: read-only.', instruction)
+                    self.assertIn('--approve-for-me', args)
 
     def test_advisory_execution_is_read_only_single_call_without_check_or_certificate(self) -> None:
         (self.project / 'source.py').write_text('value = 1\n')
@@ -192,13 +228,38 @@ class ExecutionTests(unittest.TestCase):
         rows = [json.loads(line) for line in trace.read_text().splitlines()]
         self.assertEqual([a['profile'] for a in receipt['attempts']], ['cheap', 'cheap', 'balanced'])
         self.assertEqual(len(rows), 3)
-        for row in rows:
+        for index, row in enumerate(rows):
+            measured = receipt['attempts'][index]['submitted_context']
+            self.assertEqual(measured['prompt_chars'], len(row['prompt']))
+            self.assertEqual(measured['prompt_utf8_bytes'], len(row['prompt'].encode('utf-8')))
+            self.assertEqual(measured['repair_chars'] > 0, index > 0)
             policy = next(arg for arg in row['args'] if arg.startswith('developer_instructions='))
             self.assertNotIn('ONE_TASK_GOAL_MARKER', policy)
             self.assertEqual(row['prompt'].count('ONE_TASK_GOAL_MARKER'), 1)
             self.assertEqual(row['prompt'].count('ACCEPTANCE CRITERIA'), 1)
             self.assertIn('skills.max_context_tokens=1000', row['args'])
         self.assertIn('EXPECTED_FAILURE_DETAIL', rows[1]['prompt'])
+
+    def test_submitted_context_counts_match_actual_payload_without_token_claim(self):
+        trace = Path(self.temp.name)/'submitted.json'
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1));\n" +
+            f"pathlib.Path({str(trace)!r}).write_text(json.dumps({{'prompt':sys.stdin.read(),'args':sys.argv}}))"))
+        job = self.job();job['brief']['CONTEXT'] = {'notes': ['не терять смысл', 'keep  spaces']}
+        instructions = self.execution._leaf_instructions
+        with patch.object(self.execution, '_leaf_instructions', side_effect=lambda text: instructions(text)+'\nроль: проверяющий'):
+            receipt = self.execute(job)
+        sent = json.loads(trace.read_text())
+        instruction = json.loads(next(arg.split('=',1)[1] for arg in sent['args'] if arg.startswith('developer_instructions=')))
+        measured = receipt['attempts'][0]['submitted_context']
+        self.assertEqual(measured['prompt_chars'], len(sent['prompt']))
+        self.assertEqual(measured['prompt_utf8_bytes'], len(sent['prompt'].encode('utf-8')))
+        self.assertEqual(measured['instruction_chars'], len(instruction))
+        self.assertEqual(measured['instruction_utf8_bytes'], len(instruction.encode('utf-8')))
+        self.assertGreater(measured['instruction_utf8_bytes'], measured['instruction_chars'])
+        self.assertEqual(measured['repair_chars'], 0)
+        self.assertNotIn('tokens', measured)
+        self.assertEqual(json.loads(Path(receipt['manifests'][0]).read_text())['attempts'][0]['submitted_context'], measured)
 
     def test_diagnostic_mode_reaches_native_retry_without_losing_original_goal(self):
         config=self.project/'.orchestra/project.toml'
@@ -215,6 +276,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(len(rows),3)
         self.assertEqual(receipt['attempts'][1]['repair_context_strategy'],'diagnostic')
         self.assertIn('ValueError: EARLY_DIAGNOSTIC',rows[1]['prompt'])
+        self.assertIn('"schema":2', rows[1]['prompt'])
         self.assertIn('original_criteria_remain_binding',rows[1]['prompt'])
         self.assertEqual(rows[1]['prompt'].count('UNCHANGED_GOAL'),1)
 
@@ -309,6 +371,124 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(receipt['status'], 'failed')
         self.assertIn('context:', receipt['failure'])
         self.assertEqual(len(receipt['attempts']), 1)
+
+    def _progress_job(self, *, fixed=True):
+        (self.project / 'source.py').write_text('value = 0\n')
+        if fixed:
+            path = self.project / '.orchestra/project.toml'
+            path.write_text(path.read_text() + '\n[routing]\nenabled = false\n')
+        return self.job(evidence_files=['source.py'], checks=[{
+            'argv': [sys.executable, '-B', '-c', "from source import value; print('incorrect value') if value != 3 else None; raise SystemExit(value != 3)"],
+            'failure_cause': 'implementation'}])
+
+    def test_controlled_before_after_saves_a_launch_without_accepting_failed_code(self):
+        job = self._progress_job()
+        with patch.object(self.execution, 'repeated_failure', return_value=None):
+            before = self.execute(job)
+        self.state.unlink()
+        after = self.execute(job)
+        self.assertEqual([before['status'], after['status']], ['failed', 'failed'])
+        self.assertEqual([len(before['attempts']), len(after['attempts'])], [3, 2])
+        self.assertIsNone(after['evidence_ref'])
+        self.assertEqual((self.project/'source.py').read_text(), 'value = 0\n')
+
+    def test_first_feedback_repair_can_succeed_with_the_same_model(self):
+        job = self._progress_job()
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1));\nif count == 1: pathlib.Path('source.py').write_text('value = 3\\n')"))
+        receipt = self.execute(job)
+        self.assertEqual(receipt['status'], 'verified')
+        self.assertEqual(len(receipt['attempts']), 2)
+        self.assertIsNotNone(receipt['evidence_ref'])
+
+    def test_distinct_escalation_can_fix_identical_failed_states(self):
+        job = self._progress_job(fixed=False)
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1));\nif count == 2: pathlib.Path('source.py').write_text('value = 3\\n')"))
+        receipt = self.execute(job)
+        self.assertEqual(receipt['status'], 'verified')
+        self.assertEqual([a['profile'] for a in receipt['attempts']], ['cheap', 'cheap', 'balanced'])
+        self.assertIsNotNone(receipt['evidence_ref'])
+
+    def test_identical_failed_repairs_stop_before_same_model_third_launch(self):
+        job = self._progress_job()
+        self.cli.write_text(self.cli.read_text().replace("{'type': 'turn.completed'}",
+            "{'type': 'turn.completed', 'usage': {'input_tokens': 100, 'output_tokens': 10}}"))
+        receipt = self.execute(job)
+        self.assertEqual(receipt['status'], 'failed')
+        self.assertEqual(self.state.read_text(), '2')
+        self.assertEqual(receipt['usage']['totals']['total_tokens'], 220)
+        self.assertIsNone(receipt['evidence_ref'])
+        self.assertIn('without progress', receipt['failure'])
+        self.assertEqual(receipt['retry_stop']['matching_attempts'], [1, 2])
+        self.assertEqual(receipt['retry_stop']['next_action'], 'root-reassessment')
+        manifest = json.loads(Path(receipt['manifests'][0]).read_text())
+        self.assertEqual(manifest['retry_stop'], receipt['retry_stop'])
+        events = [json.loads(line) for line in Path(receipt['events_path']).read_text().splitlines()]
+        self.assertIn('retry-stopped', [e['phase'] for e in events])
+
+    def test_stalled_cheap_repair_still_gets_distinct_model_escalation(self):
+        receipt = self.execute(self._progress_job(fixed=False))
+        self.assertEqual(len(receipt['attempts']), 3)
+        self.assertEqual([a['profile'] for a in receipt['attempts']], ['cheap', 'cheap', 'balanced'])
+        self.assertNotIn('retry_stop', receipt)
+
+    def test_source_progress_keeps_third_attempt_and_successful_evidence(self):
+        job = self._progress_job()
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1)); pathlib.Path('source.py').write_text('value = '+str(count+1)+'\\n')"))
+        receipt = self.execute(job)
+        self.assertEqual(receipt['status'], 'verified')
+        self.assertEqual(len(receipt['attempts']), 3)
+        self.assertIsNotNone(receipt['evidence_ref'])
+
+    def test_diagnostic_progress_keeps_third_attempt(self):
+        job = self._progress_job()
+        job['checks'] = [{'argv': [sys.executable, '-c',
+            f"from pathlib import Path; n=int(Path({str(self.state)!r}).read_text()); print('failure', n); raise SystemExit(n < 3)"],
+            'failure_cause': 'implementation'}]
+        receipt = self.execute(job)
+        self.assertEqual(receipt['status'], 'verified')
+        self.assertEqual(len(receipt['attempts']), 3)
+
+    def test_passing_environment_precheck_still_allows_duplicate_failure_stop(self):
+        job = self._progress_job()
+        job['checks'].insert(0, {'argv': [sys.executable, '-c', "print('environment ready')"],
+                                 'failure_cause': 'environment'})
+        receipt = self.execute(job)
+        self.assertEqual(len(receipt['attempts']), 2)
+        self.assertEqual(receipt['status'], 'failed')
+        self.assertIn('retry_stop', receipt)
+
+    def test_missing_earlier_check_log_abstains_from_duplicate_stop(self):
+        job = self._progress_job()
+        original = self.execution.route_task
+        def route(*args, **kwargs):
+            if kwargs.get('attempt') == 1:
+                for log in (self.project/'.orchestra/executions').glob('*/attempt-1-check-1.log'):
+                    log.unlink()
+            return original(*args, **kwargs)
+        with patch.object(self.execution, 'route_task', side_effect=route):
+            receipt = self.execute(job)
+        self.assertEqual(len(receipt['attempts']), 3)
+        self.assertNotIn('retry_stop', receipt)
+
+    def test_no_progress_stop_requires_explicit_source_evidence(self):
+        job = self._progress_job()
+        job.pop('evidence_files')
+        receipt = self.execute(job)
+        self.assertEqual(len(receipt['attempts']), 3)
+        self.assertNotIn('retry_stop', receipt)
+
+    def test_alias_profiles_with_identical_launch_settings_are_not_escalation(self):
+        job = self._progress_job(fixed=False)
+        path = self.project / '.orchestra/project.toml'
+        text = path.read_text().replace('model = "gpt-5.6-terra"', 'model = "gpt-5.6-luna"')
+        text = text.replace('[profiles.balanced]\nmodel = "gpt-5.6-luna"\neffort = "high"', '[profiles.balanced]\nmodel = "gpt-5.6-luna"\neffort = "medium"')
+        path.write_text(text)
+        receipt = self.execute(job)
+        self.assertEqual(len(receipt['attempts']), 2)
+        self.assertIn('without progress', receipt['failure'])
 
     def test_first_check_failure_repairs_then_escalates_on_second_failure(self) -> None:
         checker = Path(self.temp.name) / "check.py"

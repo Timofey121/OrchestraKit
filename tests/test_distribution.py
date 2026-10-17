@@ -11,6 +11,27 @@ from pathlib import Path
 KIT = Path(__file__).resolve().parents[1]
 
 class DistributionTests(unittest.TestCase):
+    def test_runtime_workflow_and_verification_cache_are_not_publishable(self):
+        paths=['.orchestra/workflows/example.json',
+               '.orchestra/verification-cache/check/example.json',
+               '.orchestra/verification-cache/review/example.json']
+        if not shutil.which('git'):
+            self.skipTest('git is required to verify ignore behavior')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            shutil.copyfile(KIT/'.gitignore',root/'.gitignore')
+            initialized=subprocess.run(['git','init','--quiet',str(root)],text=True,capture_output=True)
+            self.assertEqual(initialized.returncode,0,initialized.stderr)
+            result=subprocess.run(['git','check-ignore','--no-index','--stdin'],cwd=root,
+                                  input='\n'.join(paths)+'\n',text=True,capture_output=True)
+            self.assertEqual(result.stdout.splitlines(),paths)
+
+    def test_package_version_matches_runtime(self):
+        import tomllib
+        from orchestra_kit import __version__
+        metadata=tomllib.loads((KIT/'pyproject.toml').read_text(encoding='utf-8'))
+        self.assertEqual(metadata['project']['version'],__version__)
+
     def test_installed_package_and_reexported_skill_work_outside_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -45,7 +66,7 @@ class DistributionTests(unittest.TestCase):
             root=Path(directory);source=root/'source';source.mkdir()
             for name in ['src','templates','skills','bin','frontend','tests','.github']:
                 shutil.copytree(KIT/name,source/name,ignore=shutil.ignore_patterns('__pycache__','*.egg-info','node_modules'))
-            for name in ['README.md','CONTRIBUTING.md','LICENSE','DESIGN.md','pyproject.toml','setup.py','MANIFEST.in','docs/getting-started.md','docs/local-dashboard.md','docs/project-config.md','docs/hooks-and-orchestration.md','docs/architecture.md','docs/features.md','docs/providers/deepseek.md','docs/workflow-comparison.md','docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md']:
+            for name in ['.gitignore','README.md','CONTRIBUTING.md','LICENSE','DESIGN.md','pyproject.toml','setup.py','MANIFEST.in','docs/getting-started.md','docs/local-dashboard.md','docs/project-config.md','docs/hooks-and-orchestration.md','docs/architecture.md','docs/features.md','docs/providers/deepseek.md','docs/workflow-comparison.md','docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md','docs/evaluation.md','docs/native-workflow.md']:
                 target=source/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(KIT/name,target)
             result=subprocess.run([sys.executable,'setup.py','sdist','--dist-dir',str(root/'dist')],cwd=source,text=True,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
@@ -59,7 +80,7 @@ class DistributionTests(unittest.TestCase):
                         path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(archive.extractfile(member).read());path.chmod(member.mode)
                     else:self.fail('unexpected archive link or special file')
             received=next(unpacked.iterdir())
-            for relative in ['docs/getting-started.md', 'docs/architecture.md', 'docs/features.md', 'docs/workflow-comparison.md', 'docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md', 'LICENSE', 'CONTRIBUTING.md', 'tests/test_execution.py', '.github/pull_request_template.md']:
+            for relative in ['docs/getting-started.md', 'docs/architecture.md', 'docs/features.md', 'docs/workflow-comparison.md', 'docs/memory-navigation.md','docs/consultation.md','docs/questions.md','docs/adoption-status.md','docs/evaluation.md','docs/native-workflow.md', 'LICENSE', 'CONTRIBUTING.md', 'tests/test_execution.py', '.github/pull_request_template.md']:
                 self.assertTrue((received/relative).is_file(), relative)
             self.assertFalse((received/'.orchestra/archive').exists())
             self.assertFalse((received/'.idea').exists())

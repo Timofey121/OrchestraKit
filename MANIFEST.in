@@ -1,7 +1,9 @@
-include README.md CONTRIBUTING.md LICENSE DESIGN.md setup.py bin/orchestra
+include README.md CONTRIBUTING.md LICENSE DESIGN.md setup.py bin/orchestra .gitignore
 include docs/getting-started.md docs/local-dashboard.md docs/project-config.md
 include docs/hooks-and-orchestration.md docs/architecture.md docs/features.md
 include docs/workflow-comparison.md docs/memory-navigation.md
+include docs/evaluation.md
+include docs/native-workflow.md
 include docs/consultation.md
 include docs/adoption-status.md docs/questions.md
 recursive-include docs/providers *.md

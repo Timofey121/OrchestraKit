@@ -44,6 +44,38 @@ names. Optional `review_files` lists the exact files covered by a read-only
 review; the runner rejects any change to them during execution or checks.
 Do not use that field for files an implementation leaf is supposed to edit.
 
+## Full worker and review cycle
+
+For an independent worker task that needs checks and bounded post-review fixes,
+use `workflow PROJECT --input JOB.json --max-launches 6 --dry-run`, then omit
+`--dry-run` when the model calls are authorized. Supply explicit `evidence_files`
+covering the implementation, tests and relevant inputs. The command builds a
+read-only reviewer brief from the original task and final file list. It retains
+all original criteria and scope during repair. Small coupled work stays in root.
+
+The shared configured repair budget includes test failures and reviewer FAILs.
+Each native leaf gets one attempt; the controller chooses repairs/escalation
+from typed check causes, never free-form failure guesses. Missing context,
+environment and capability failures return to root. Unknown counters stop new
+calls; the launch and observed-token limits cover worker and reviewer phases.
+Source/check/report drift cannot preserve a PASS. Retain failed phases in cost
+comparisons and report unresolved tasks separately.
+
+Reuse is off by default. Only use `--reuse --environment CONDITIONS.json
+--dependencies DEPENDENCIES.json` when root can explicitly enumerate relevant
+conditions and dependency files (an explicit empty array is allowed). Never
+include credentials. Matching check evidence can avoid a repeated worker call;
+`fresh_reviewer_always = true` still requires a new reviewer. Reusing a review
+also requires that setting to be false. This does not waive required independent
+review levels for integration or completion. Unknown external state requires
+fresh execution. Every hit rechecks source, policy and artifact hashes and
+retains the originating evidence ref; do not claim its original calls were free.
+
+The receipt is `.orchestra/workflows/UUID.json`. Abrupt interruption retains
+`workflow.lock` and the dispatch record for root reconciliation; never remove
+them just to replay a possibly completed call. The controller does not measure
+root chat, billing or development cost, and does not attest serving models.
+
 Each check uses an argv list without an implicit shell. The root chooses trusted
 checks appropriate to the task. Classify the consequence of a nonzero exit with
 `failure_cause`: `implementation`, `capability`, `context`, or `environment`.

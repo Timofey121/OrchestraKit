@@ -39,6 +39,7 @@ python3 -m build
 | Задачи, evidence и история | `state.py`, `evidence.py`, `events.py`, `fingerprint.py`, `handoff.py` |
 | Очередь и leases | `queue.py` |
 | Учёт использования и калибровка | `usage.py`, `calibration.py` |
+| Проверочные задачи и измерение процесса | `evaluation.py`, `evaluation_cases.py`; запуск и ограничения в [руководстве](docs/evaluation.md) |
 | Диагностика, память и навигация | `diagnostics.py`, `memory.py`, `navigation.py` |
 | Советы и вопросы через главного агента | `consultation.py`, `questions.py` |
 | Внешние Providers и секреты | `providers.py`, `settings.py` |

@@ -3,6 +3,9 @@
 `compare-workflows` сравнивает варианты процесса на одних заданиях и моделях.
 Он не запускает модели, не меняет настройки и не оценивает стоимость в деньгах.
 
+Для готовых задач, отдельных рабочих каталогов и учёта исполнителя вместе
+с проверяющим используйте [набор проверочных задач](evaluation.md).
+
 ```bash
 ./bin/orchestra compare-workflows "<проект>" --input samples.json \
   --profile cheap --variant before --variant after --baseline before

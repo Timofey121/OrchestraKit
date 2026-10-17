@@ -37,3 +37,21 @@ criteria and initial requested settings; count all attempts, including failures.
 The comparison does not execute models or verify supplied quality judgments.
 Use independent checks/review first; incomplete observations cannot support a
 savings recommendation. See [reliability](reliability.md) for the command.
+
+## Repeatable coding tasks
+
+`eval list` describes six bundled synthetic Python tasks. `eval prepare --output
+NEW_DIRECTORY --variant baseline --repeat 2` creates isolated task projects and
+external acceptance graders. Preparation, `eval grade`, `eval report` and
+`eval compare BEFORE_DIRECTORY AFTER_DIRECTORY` do not invoke models.
+
+Only `eval run DIRECTORY --max-launches N` invokes configured native workers and
+independent reviewers. Agree on the live-run scope first. The limit counts
+Codex CLI launches, including stored attempts, not internal inference requests
+or tokens. Default preparation disables repairs; `--repair-cycles 1|2` enables
+them for separate retry experiments. Test projects use the bundled profile
+defaults, not a copy of the user's project configuration.
+
+Preserve failed trials and every role's usage. An interrupted start never
+authorizes automatic replay. Report development costs separately when known;
+unknown host or root costs stay unknown. A baseline alone shows no savings.

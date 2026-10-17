@@ -180,6 +180,89 @@ class DiagnosticsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fit"):
             build_repair_packet(self.project, checks, max_chars=20)
 
+    def test_default_packet_keeps_legacy_schema_and_complete_tail(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+        ref = self.log('ValueError: ' + 'long detail '*20+'\n')
+        packet = json.loads(build_repair_packet(self.project, [{'argv': ['test'],
+            'returncode': 1, 'failure_cause': 'implementation', 'log': ref}]))
+        self.assertEqual(packet['schema'], 1)
+        self.assertEqual(packet['failures'][0]['tail'], packet['failures'][0]['diagnostics'])
+        self.assertNotIn('tail_refs', packet['failures'][0])
+
+    def test_short_overlapping_error_is_also_deduplicated_without_growth(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+        ref = self.log('ERROR: x\n')
+        checks = [{'argv': ['test'], 'returncode': 1, 'failure_cause': 'implementation', 'log': ref}]
+        old = build_repair_packet(self.project, checks)
+        encoded = build_repair_packet(self.project, checks, compact=True)
+        packet = json.loads(encoded)
+        self.assertEqual(packet['failures'][0]['tail'], [])
+        self.assertEqual(packet['failures'][0]['tail_refs'], [1])
+        self.assertLessEqual(len(encoded), len(old))
+        self.assertLessEqual(len(encoded.encode()), len(old.encode()))
+
+    def test_repair_overlap_keeps_one_copy_with_lossless_tail_references(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+        text = 'ValueError: ' + 'detail ' * 20
+        ref = self.log(text+'\n'+text+'\n')
+        packet = json.loads(build_repair_packet(self.project, [{
+            'argv': ['python', 'test.py'], 'returncode': 1,
+            'failure_cause': 'implementation', 'log': ref}], max_chars=2400, compact=True))
+        failure = packet['failures'][0]
+        self.assertEqual(packet['schema'], 2)
+        self.assertEqual(failure['tail'], [])
+        self.assertEqual(failure['tail_refs'], [1, 2])
+        self.assertEqual([entry['line'] for entry in failure['diagnostics']], [1, 2])
+        self.assertEqual([entry['text'] for entry in failure['diagnostics']], [text, text])
+        restored = sorted(failure['tail'] + [entry for entry in failure['diagnostics']
+                          if entry['line'] in failure['tail_refs']], key=lambda e: e['line'])
+        self.assertEqual(restored, [{'line': 1, 'text': text}, {'line': 2, 'text': text}])
+
+    def test_limited_packet_uses_only_freed_space_without_dropping_metadata(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+        first = self.log('ValueError: ' + 'detail '*40+'\n', 'first.log')
+        second = self.log('ValueError: IMPORTANT_CAUSE\n' + ''.join('ERROR: noisy '+str(n)+' '+('x'*90)+'\n' for n in range(10)), 'second.log')
+        checks = [{'argv': ['python', 'test.py'], 'returncode': 1,
+                   'failure_cause': 'implementation', 'log': ref} for ref in (first, second)]
+        legacy = build_repair_packet(self.project, checks, max_chars=1100)
+        encoded = build_repair_packet(self.project, checks, max_chars=1100, compact=True)
+        old = json.loads(legacy);packet = json.loads(encoded);failure = packet['failures'][1]
+        self.assertEqual(old['failures'][1]['diagnostics'], [])
+        self.assertLessEqual(len(encoded), len(legacy))
+        self.assertTrue(packet['limited'])
+        self.assertTrue(failure['detail_limited'])
+        self.assertEqual((failure['argv'], failure['returncode'], failure['failure_cause'], failure['log']),
+                         (['python', 'test.py'], 1, 'implementation', second))
+        self.assertIn('ValueError: IMPORTANT_CAUSE', [item['text'] for item in failure['diagnostics']])
+
+    def test_compact_packets_never_grow_or_drop_legacy_evidence(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+        refs = [self.log('Traceback (most recent call last):\nValueError: '+('bad '*n)+'\nend\n', str(n)+'.log') for n in (1, 20, 90)]
+        checks = [{'argv': ['test', str(n)], 'returncode': 1,
+                   'failure_cause': 'implementation', 'log': ref} for n, ref in enumerate(refs)]
+        refs.append(self.log('ValueError: '+('ошибка '*30)+'\n'+'ERROR: '+('原因 '*90)+'\n', 'unicode.log'))
+        checks = [{'argv': ['test', str(n)], 'returncode': 1, 'failure_cause': 'implementation', 'log': ref} for n, ref in enumerate(refs)]
+        for limit in (400, 650, 900, 1400, 2400, 6000):
+            with self.subTest(limit=limit):
+                try:
+                    legacy = build_repair_packet(self.project, checks, max_chars=limit)
+                except ValueError:
+                    with self.assertRaises(ValueError):
+                        build_repair_packet(self.project, checks, max_chars=limit, compact=True)
+                    continue
+                encoded = build_repair_packet(self.project, checks, max_chars=limit, compact=True)
+                self.assertLessEqual(len(encoded), len(legacy))
+                self.assertLessEqual(len(encoded.encode('utf-8')), len(legacy.encode('utf-8')))
+                old = json.loads(legacy);new = json.loads(encoded)
+                self.assertEqual(new.get('omitted_failures'), old.get('omitted_failures'))
+                self.assertEqual(len(new['failures']), len(old['failures']))
+                for before, after in zip(old['failures'], new['failures']):
+                    for field in ('argv', 'returncode', 'failure_cause', 'log', 'output_incomplete'):
+                        self.assertEqual(before[field], after[field])
+                    tail = after['tail'] + [item for item in after['diagnostics'] if item['line'] in after.get('tail_refs', [])]
+                    self.assertTrue(all(item in after['diagnostics'] for item in before['diagnostics']))
+                    self.assertTrue(all(item in tail for item in before['tail']))
+
     def test_repair_packet_redacts_and_does_not_mutate_logs(self):
         from orchestra_kit.diagnostics import build_repair_packet
 

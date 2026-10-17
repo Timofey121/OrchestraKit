@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import importlib.util
 import tempfile
 import unittest
@@ -118,6 +119,19 @@ class RoutingTests(unittest.TestCase):
         del data['SCOPE']
         with self.assertRaisesRegex(ValueError, 'SCOPE'):
             self.routing.build_brief(self.config, data)
+
+    def test_structured_brief_is_compact_and_losslessly_decodable(self):
+        data = {name: {'items': ['keep  spaces', 'строка\nnext', {'path': 'src/file.py', 'enabled': True}]}
+                for name in self.routing.BRIEF_SECTIONS}
+        result = self.routing.build_brief(self.config, data)
+        legacy = '\n\n'.join(name+'\n'+json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+                              for name, value in data.items())+'\n'
+        self.assertLess(len(result), len(legacy))
+        for section, (name, value) in zip(result.strip().split('\n\n'), data.items()):
+            heading, encoded = section.split('\n', 1)
+            self.assertEqual(heading, name)
+            self.assertEqual(json.loads(encoded), value)
+            self.assertEqual(encoded, json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False))
 
     def test_oversized_brief_is_refused_without_dropping_constraints(self) -> None:
         data = {name: 'x' for name in ['GOAL', 'SOURCES OF TRUTH', 'SCOPE', 'ACCEPTANCE CRITERIA', 'VERIFICATION', 'CONTEXT']}

@@ -357,8 +357,55 @@ def _compact(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def build_repair_packet(project: Path, checks: list[dict], *, max_chars: int = 2400) -> str:
+def _deduplicate_failure(failure: dict[str, Any]) -> dict[str, Any]:
+    """Reference exact diagnostic/tail overlaps, preserving distinct log lines."""
+    diagnostics = {item['line']: item for item in failure['diagnostics']}
+    overlap = [item for item in failure['tail'] if diagnostics.get(item['line']) == item]
+    if not overlap:
+        return failure
+    candidate = {**failure,
+                 'tail': [item for item in failure['tail'] if item not in overlap],
+                 'tail_refs': sorted(set(failure.get('tail_refs', [])) |
+                                                 {item['line'] for item in overlap})}
+    return candidate if len(_compact(candidate)) < len(_compact(failure)) else failure
+
+
+def _fit_repair_details(packet: dict[str, Any], failures: list[dict[str, Any]], max_chars: int) -> dict[str, Any]:
+    # Start from the existing bounded envelope. Never trade an already retained
+    # failure's metadata or detail for another excerpt. Fill only spare space.
+    baseline_encoded = _compact(packet)
+    max_chars = min(max_chars, len(baseline_encoded))
+    max_bytes = len(baseline_encoded.encode('utf-8'))
+    packet = {**packet, 'schema': 2, 'failures': [_deduplicate_failure(item) for item in packet['failures']]}
+    for index, original in enumerate(failures[:len(packet['failures'])]):
+        if not packet['failures'][index].get('detail_limited'):
+            continue
+        diagnostics = sorted(original['diagnostics'],
+                             key=lambda item: (not bool(_EXCEPTION_LINE.search(item['text'])), item['line']))
+        for field, item in [('diagnostics', item) for item in diagnostics] + [('tail', item) for item in reversed(original['tail'])]:
+            current = packet['failures'][index]
+            if field == 'tail' and item['line'] in current.get('tail_refs', []):
+                continue
+            detail = {**current, field: sorted([*current[field], item], key=lambda entry: entry['line'])}
+            detail = _deduplicate_failure(detail)
+            candidate = {**packet, 'failures': [*packet['failures'][:index], detail, *packet['failures'][index+1:]]}
+            encoded = _compact(candidate)
+            if len(encoded) <= max_chars and len(encoded.encode('utf-8')) <= max_bytes:
+                packet = candidate
+        current = packet['failures'][index]
+        tail = sorted(current['tail'] + [item for item in current['diagnostics']
+                      if item['line'] in current.get('tail_refs', [])], key=lambda item: item['line'])
+        if current['diagnostics'] == original['diagnostics'] and tail == original['tail']:
+            current.pop('detail_limited', None)
+    packet['limited'] = bool(packet.get('omitted_failures') or any(item.get('detail_limited') for item in packet['failures']))
+    return packet
+
+
+def build_repair_packet(project: Path, checks: list[dict], *, max_chars: int = 2400,
+                        compact: bool = False) -> str:
     """Build compact, untrusted diagnostic evidence for a retry without mutation."""
+    if type(compact) is not bool:
+        raise ValueError("compact must be boolean")
     if not isinstance(checks, list):
         raise ValueError("checks must be a list")
     if type(max_chars) is not int or max_chars < 1:
@@ -416,4 +463,4 @@ def build_repair_packet(project: Path, checks: list[dict], *, max_chars: int = 2
             raise ValueError("max_chars cannot report the bounded repair packet")
         packet = candidate
         break
-    return _compact(packet)
+    return _compact(_fit_repair_details(packet, failures, max_chars) if compact else packet)

@@ -35,6 +35,24 @@ the root to check the unavailable tool or host feature. Environment failures
 stop until their prerequisite is resolved. Every repair consumes the same bounded
 budget, including escalation.
 
+## Repeated failures without progress
+
+The native runner retains the first feedback repair. With explicit evidence
+files and complete implementation-check logs, two identical failed states stop
+another call using the same requested model, provider and effort. Profile names
+alone do not establish a different execution route. Changed declared sources,
+check output or execution settings permit the remaining bounded attempts.
+Missing, truncated or unreadable evidence leaves the ordinary repair policy in
+place. No output normalization or similarity model is used.
+
+A stopped execution remains failed, with `retry_stop` in the receipt and terminal
+manifest and a `retry-stopped` event. Root inspects the retained artifacts before
+choosing a new approach; do not automatically redispatch the same job to bypass
+this stop. Independent review and acceptance criteria remain required. This
+heuristic cannot prove a stochastic next attempt would fail, nor observe changes
+outside the declared files. Count full workflow costs before claiming savings;
+a no-repair baseline does not measure avoided retries.
+
 ## Context limits and cache-friendly requests
 
 Keep invariant instructions, tool schemas, and relevant stable policy together
@@ -49,6 +67,22 @@ character limits, not token estimates. Return a short summary, changed paths,
 checks with outcomes/evidence, remaining work, and failure cause. Put verbose
 logs in task artifacts and reference their paths. Record actual token counts,
 elapsed time, and cost only if supplied by the runtime; unknown values stay null.
+
+Native briefs serialize structured sections as compact JSON without removing
+values or sections. String content retains the existing whitespace-trimming
+behavior; constraints and acceptance criteria must never be summarized away.
+Diagnostic repair mode uses schema 2: `tail_refs` lists diagnostic
+line numbers that also belong to the tail. Reconstruct that tail by merging
+those diagnostic entries with `tail`, ordered by line number. Equal text at
+different line numbers is not deduplicated. Previously retained metadata and
+excerpts remain available; freed space can restore limited excerpts. Both
+character and UTF-8 byte sizes remain at most the legacy packet size. Direct
+`build_repair_packet` callers retain schema 1 unless `compact=True` is supplied.
+
+Attempt receipts/manifests record `submitted_context` sizes for the explicit
+prompt and developer instructions. These are character/byte counts, not token
+usage, billing, or total inference context; host instructions, tool calls and
+files read by a leaf are outside this measurement. Keep runtime usage separate.
 
 ## Reusing accepted solutions
 

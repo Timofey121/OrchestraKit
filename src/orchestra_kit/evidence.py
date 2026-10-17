@@ -53,7 +53,8 @@ def create_evidence(project,files,checks,*,review_verdict=None,owner=None,snapsh
     with os.fdopen(fd,'w') as f:json.dump(payload,f,ensure_ascii=False,allow_nan=False);f.flush();os.fsync(f.fileno())
     return ref
 
-def verify_evidence(project,ref,*,kind,required_files=()):
+def verify_evidence(project,ref,*,kind,required_files=(),review_verdict='PASS'):
+    if review_verdict not in {'PASS','FAIL'}:raise ValueError('invalid expected review verdict')
     if not isinstance(ref,str) or not ref.startswith('.orchestra/evidence/') or not ref.endswith('.json'):
         raise ValueError('evidence_ref must identify a generated evidence certificate')
     path=_safe(project,ref)
@@ -65,13 +66,15 @@ def verify_evidence(project,ref,*,kind,required_files=()):
     if set(required_files)-set(snapshot['files']):raise ValueError('evidence does not cover required subjects')
     if not isinstance(cert['checks'],list) or not cert['checks'] or any(not isinstance(c,dict) or type(c.get('returncode')) is not int or c['returncode']!=0 for c in cert['checks']):raise ValueError('evidence checks did not pass')
     if kind not in {'check','review'}:raise ValueError('invalid evidence kind')
-    if kind=='review' and cert.get('review_verdict')!='PASS':raise ValueError('review evidence must have independent PASS')
+    if kind=='review' and cert.get('review_verdict')!=review_verdict:raise ValueError('review evidence must have independent '+review_verdict)
     if not isinstance(cert['artifacts'],list) or not cert['artifacts'] or len(cert['artifacts'])!=len(cert['checks']) or any(not isinstance(a,dict) or set(a)!={'path','sha256'} for a in cert['artifacts']):raise ValueError('missing or invalid check artifacts')
     for a in cert['artifacts']:
         if _digest(_safe(project,a['path']))!=a['sha256']:raise ValueError('evidence artifact changed')
     if kind=='review':
         report=cert.get('review_report')
         if not isinstance(report,dict) or set(report)!={'path','sha256'} or _digest(_safe(project,report['path']))!=report['sha256']:raise ValueError('review artifact changed or missing')
+        lines=_safe(project,report['path']).read_text().splitlines()
+        if not lines or lines[0].strip()!='VERDICT: '+review_verdict:raise ValueError('review report verdict mismatch')
     return cert
 
 def run_evidence(project,files,checks,*,timeout_seconds=180):

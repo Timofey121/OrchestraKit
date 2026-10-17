@@ -126,7 +126,7 @@ def build_brief(config: ProjectConfig, data: Any) -> str:
         value = data[name]
         if not isinstance(value, (str, list, dict)) or (isinstance(value, str) and not value.strip()):
             raise ValueError(f"{name} must contain nonempty text or structured context")
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         sections.append(f"{name}\n{text.strip()}")
     brief = "\n\n".join(sections) + "\n"
     if len(brief) > config.context.max_brief_chars:

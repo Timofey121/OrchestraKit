@@ -112,6 +112,16 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument('--dry-run', action='store_true')
     execute.add_argument('--workspace',help='Prepared isolated worktree; parent policy stays authoritative')
     execute.add_argument('--write-path',action='append',default=None)
+    workflow = commands.add_parser('workflow', help='Run worker, checks, independent review and bounded repairs')
+    workflow.add_argument('project', nargs='?', default='.')
+    workflow.add_argument('--input', required=True, help='Original worker job JSON, as for execute')
+    workflow.add_argument('--max-launches', type=int, required=True)
+    workflow.add_argument('--timeout', type=int, default=180)
+    workflow.add_argument('--codex')
+    workflow.add_argument('--dry-run', action='store_true')
+    workflow.add_argument('--reuse', action='store_true', help='Opt in to exact-context verification reuse')
+    workflow.add_argument('--environment', help='JSON file of explicit relevant environment conditions; no credentials')
+    workflow.add_argument('--dependencies', help='JSON file listing relevant dependency/check/lock files; [] if none')
     consultation=commands.add_parser('consult',help='Ask one strong read-only advisor before root decides on escalation')
     consultation.add_argument('project');consultation.add_argument('--input',required=True)
     consultation.add_argument('--codex');consultation.add_argument('--timeout',type=int,default=180)
@@ -159,6 +169,20 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument('--profile',action='append',required=True)
     compare.add_argument('--variant',action='append',required=True)
     compare.add_argument('--baseline',required=True)
+    evaluation=commands.add_parser('eval',help='Prepare and measure reproducible coding tasks; only run invokes models')
+    evaluation.set_defaults(project='.')
+    evaluations=evaluation.add_subparsers(dest='eval_command',required=True)
+    evaluations.add_parser('list')
+    prepare=evaluations.add_parser('prepare');prepare.add_argument('--output',required=True)
+    prepare.add_argument('--case',action='append');prepare.add_argument('--repeat',type=int,default=2)
+    prepare.add_argument('--variant',default='baseline');prepare.add_argument('--repair-cycles',type=int,default=0)
+    run_eval=evaluations.add_parser('run');run_eval.add_argument('directory')
+    run_eval.add_argument('--max-launches','--max-calls',dest='max_calls',type=int,required=True,
+                          help='Limit native Codex CLI launches, not host-internal inference requests')
+    run_eval.add_argument('--timeout',type=int,default=180)
+    report_eval=evaluations.add_parser('report');report_eval.add_argument('directory')
+    grade=evaluations.add_parser('grade');grade.add_argument('directory')
+    comparison=evaluations.add_parser('compare');comparison.add_argument('before');comparison.add_argument('after')
     logs=commands.add_parser('log',help='Read or search bounded, redacted retained logs')
     log_actions=logs.add_subparsers(dest='log_command',required=True)
     for action in ('read','search'):
@@ -360,6 +384,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result=search_index(project,args.query,limit=args.limit,max_chars=args.max_chars)
                 sys.stdout.write(json.dumps(result,ensure_ascii=False,separators=(',',':')));return 0
             _print_json(result);return 0
+        if args.command=='eval':
+            from .evaluation import list_cases,prepare_suite,run_suite,report_suite,grade_trial,compare_suites
+            if args.eval_command=='list':result=list_cases()
+            elif args.eval_command=='prepare':
+                result=prepare_suite(Path(args.output).expanduser(),kit,case_ids=args.case,repeats=args.repeat,
+                                     variant=args.variant,repair_cycles=args.repair_cycles)
+            elif args.eval_command=='run':
+                result=run_suite(Path(args.directory).expanduser(),kit,max_calls=args.max_calls,timeout=args.timeout)
+            elif args.eval_command=='report':result=report_suite(Path(args.directory).expanduser())
+            elif args.eval_command=='grade':result=grade_trial(Path(args.directory).expanduser())
+            else:result=compare_suites(Path(args.before).expanduser(),Path(args.after).expanduser())
+            _print_json(result);return 0
         if args.command=='calibrate':
             from .calibration import calibrate_receipts
             config=load_config(project,kit)
@@ -429,6 +465,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1 if problems else 0
             _print_json(fingerprint_paths(project, args.paths))
             return 0
+        if args.command == 'workflow':
+            from .workflow import run_workflow
+            result=run_workflow(project,kit,_json_input(args.input),max_calls=args.max_launches,
+                timeout_seconds=args.timeout,codex_command=[args.codex] if args.codex else None,
+                dry_run=args.dry_run,reuse=args.reuse,
+                environment=_json_input(args.environment) if args.environment else None,
+                dependencies=_json_input(args.dependencies) if args.dependencies else None)
+            _print_json(result)
+            return 0 if result['status'] in {'verified','dry-run','keep-root'} else 1
         if args.command == 'execute':
             from .execution import run_job
             result = run_job(project, kit, _json_input(args.input),

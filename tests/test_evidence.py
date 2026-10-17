@@ -20,6 +20,18 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'failure_cause'):
             validate_checks([{'argv': ['/usr/bin/true'], 'failure_cause': 'unknown'}])
 
+    def test_failed_review_is_diagnostic_evidence_and_never_a_passing_gate(self):
+        from orchestra_kit.evidence import run_evidence,create_evidence,verify_evidence
+        checked=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','pass'],'failure_cause':'implementation'}])
+        report=self.project/'failed-review.txt';report.write_text('VERDICT: FAIL\nConcrete finding')
+        ref=create_evidence(self.project,['app.py'],checked['checks'],review_verdict='FAIL',review_report=report)
+        with self.assertRaisesRegex(ValueError,'PASS'):
+            verify_evidence(self.project,ref,kind='review')
+        self.assertEqual(verify_evidence(self.project,ref,kind='review',review_verdict='FAIL')['review_verdict'],'FAIL')
+        report.write_text('VERDICT: FAIL\nChanged finding')
+        with self.assertRaisesRegex(ValueError,'artifact'):
+            verify_evidence(self.project,ref,kind='review',review_verdict='FAIL')
+
     def test_actual_check_is_bound_to_source_and_log(self):
         from orchestra_kit.evidence import run_evidence,verify_evidence
         r=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','print("ok")'],'failure_cause':'implementation'}])
