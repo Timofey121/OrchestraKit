@@ -55,7 +55,9 @@ class UiServiceWindowsTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, self.task_xml, "")
         if "/create" in lowered:
             xml_path = Path(argv[lowered.index("/xml") + 1])
-            self.task_xml = xml_path.read_text(encoding="utf-8")
+            data = xml_path.read_bytes()
+            self.assertTrue(data.startswith(b"\xff\xfe"))
+            self.task_xml = data.decode("utf-16")
             return subprocess.CompletedProcess(argv, 0, "", "")
         if "/run" in lowered:
             self.running = True
@@ -79,7 +81,12 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertTrue(result["installed"])
         self.assertTrue(result["running"])
         self.assertTrue(result["healthy"])
-        root = ET.fromstring(Path(result["task_xml"]).read_text(encoding="utf-8"))
+        task_data = Path(result["task_xml"]).read_bytes()
+        self.assertTrue(task_data.startswith(b"\xff\xfe"))
+        declaration = task_data.decode("utf-16").splitlines()[0]
+        self.assertIn("encoding=", declaration)
+        self.assertIn("utf-16", declaration)
+        root = ET.fromstring(task_data)
         ns = {"t": service.TASK_NAMESPACE}
         self.assertEqual(root.findtext("t:Triggers/t:LogonTrigger/t:UserId", namespaces=ns),
                          "S-1-5-21-123-456-789-1001")
@@ -229,6 +236,122 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertIsNotNone(self.task_xml)
         service.uninstall_service(home=self.home)
         self.assertIsNone(self.task_xml)
+
+    def test_missing_registered_task_refuses_live_pid_or_occupied_port_before_recovery(self):
+        first = self.install()
+        paths = service._paths(self.home)
+        self.task_xml = None
+        self.calls.clear()
+
+        with self.assertRaisesRegex(ValueError, "recorded PID.*active|process.*active"):
+            self.install()
+        self.assertTrue(Path(first["runner"]).exists())
+        self.assertFalse(any("/create" in [part.lower() for part in call] for call in self.calls))
+
+        self.running = False
+        self.calls.clear()
+        with patch.object(service, "_listening", return_value=True):
+            with self.assertRaisesRegex(ValueError, "occupied"):
+                self.install()
+        self.assertFalse(any("/create" in [part.lower() for part in call] for call in self.calls))
+
+        self.calls.clear()
+        recovered = self.install()
+        self.assertTrue(recovered["healthy"])
+        self.assertTrue(any("/create" in [part.lower() for part in call] for call in self.calls))
+        self.assertEqual(paths.pid.read_text(encoding="ascii"), "4321\n")
+
+    def test_missing_registered_task_uninstall_preserves_live_pid_but_cleans_dead_owner(self):
+        first = self.install()
+        paths = service._paths(self.home)
+        self.task_xml = None
+        self.calls.clear()
+
+        with self.assertRaisesRegex(ValueError, "recorded PID.*active|process.*active"):
+            service.uninstall_service(home=self.home)
+        for path in (paths.task_xml, paths.runner, paths.manifest, paths.pid):
+            self.assertTrue(path.exists(), path)
+        self.assertFalse(any(part.lower() in ("/end", "/delete")
+                             for call in self.calls for part in call))
+
+        self.running = False
+        result = service.uninstall_service(home=self.home)
+        self.assertFalse(result["installed"])
+        for path in (paths.task_xml, paths.runner, paths.manifest, paths.pid):
+            self.assertFalse(path.exists(), path)
+
+    def test_every_generated_behavior_field_is_part_of_registered_ownership(self):
+        self.install()
+        original = self.task_xml
+        mutations = {
+            "hard termination": ("<AllowHardTerminate>true</AllowHardTerminate>",
+                                 "<AllowHardTerminate>false</AllowHardTerminate>"),
+            "network": ("<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+                        "<RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>"),
+            "hidden": ("<Hidden>false</Hidden>", "<Hidden>true</Hidden>"),
+            "idle": ("<RunOnlyIfIdle>false</RunOnlyIfIdle>",
+                     "<RunOnlyIfIdle>true</RunOnlyIfIdle>"),
+            "wake": ("<WakeToRun>false</WakeToRun>", "<WakeToRun>true</WakeToRun>"),
+            "priority": ("<Priority>7</Priority>", "<Priority>1</Priority>"),
+        }
+        for name, (before, after) in mutations.items():
+            with self.subTest(name=name):
+                self.task_xml = original.replace(before, after)
+                self.calls.clear()
+                with self.assertRaisesRegex(ValueError, "registered task.*modified"):
+                    service.uninstall_service(home=self.home)
+                self.assertFalse(any(part.lower() in ("/end", "/delete")
+                                     for call in self.calls for part in call))
+        self.task_xml = original
+
+    def test_extra_trigger_principal_and_settings_constraints_are_foreign(self):
+        self.install()
+        original = self.task_xml
+        additions = {
+            "start boundary": ("</LogonTrigger>",
+                               "<StartBoundary>2026-01-01T00:00:00</StartBoundary></LogonTrigger>"),
+            "end boundary": ("</LogonTrigger>",
+                             "<EndBoundary>2030-01-01T00:00:00</EndBoundary></LogonTrigger>"),
+            "delay": ("</LogonTrigger>", "<Delay>PT1M</Delay></LogonTrigger>"),
+            "trigger execution limit": ("</LogonTrigger>",
+                                        "<ExecutionTimeLimit>PT1M</ExecutionTimeLimit>"
+                                        "</LogonTrigger>"),
+            "repetition": ("</LogonTrigger>",
+                           "<Repetition><Interval>PT1M</Interval></Repetition></LogonTrigger>"),
+            "privilege": ("</Principal>",
+                          "<RequiredPrivileges><Privilege>SeDebugPrivilege</Privilege>"
+                          "</RequiredPrivileges></Principal>"),
+            "network profile": ("</Settings>",
+                                "<NetworkProfileName>foreign</NetworkProfileName></Settings>"),
+        }
+        for name, (before, after) in additions.items():
+            with self.subTest(name=name):
+                self.task_xml = original.replace(before, after, 1)
+                self.calls.clear()
+                with self.assertRaisesRegex(ValueError, "registered task.*modified"):
+                    service.uninstall_service(home=self.home)
+                self.assertFalse(any(part.lower() in ("/end", "/delete")
+                                     for call in self.calls for part in call))
+        self.task_xml = original
+
+    def test_documented_scheduler_defaults_are_safe_registration_normalization(self):
+        result = self.install()
+        source = Path(result["task_xml"]).read_bytes().decode("utf-16")
+        normalized = source.replace(
+            "</LogonTrigger>",
+            "<ExecutionTimeLimit>PT72H</ExecutionTimeLimit><Delay>PT0M</Delay></LogonTrigger>",
+        ).replace(
+            "</Principal>", "<ProcessTokenSidType>None</ProcessTokenSidType></Principal>", 1
+        ).replace(
+            "</Settings>",
+            "<IdleSettings><Duration>PT10M</Duration><WaitTimeout>PT1H</WaitTimeout>"
+            "<StopOnIdleEnd>true</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle>"
+            "</IdleSettings><DeleteExpiredTaskAfter>PT0S</DeleteExpiredTaskAfter>"
+            "<UseUnifiedSchedulingEngine>false</UseUnifiedSchedulingEngine>"
+            "<DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>"
+            "<Volatile>false</Volatile></Settings>",
+        )
+        self.assertEqual(service._task_signature(normalized), service._task_signature(source))
 
     def test_health_requires_pid_file_process_and_matching_dashboard_pid(self):
         first = self.install()

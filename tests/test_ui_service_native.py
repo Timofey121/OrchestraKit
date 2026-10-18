@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -13,6 +15,81 @@ from pathlib import Path
 
 from orchestra_kit.install import install_user_setup
 from orchestra_kit import ui_service
+
+
+def _print_command_diagnostic(label, argv, *, timeout):
+    """Print bounded process evidence without hiding the original test failure."""
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        output = (result.stdout + '\n' + result.stderr).strip()
+        print(f'{label}: exit={result.returncode}', flush=True)
+        print(output[-12000:] if output else '<no output>', flush=True)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f'{label}: unavailable: {exc}', flush=True)
+
+
+def _diagnose_macos_startup(started_at, launcher, codex, failed_port):
+    """Distinguish a slow launchd start from a process blocked before the CLI."""
+    launchd = ui_service._launchctl('print', ui_service._target(), required=False)
+    print('macOS launchd state after installer failure:', flush=True)
+    print(launchd.stdout[-12000:] or launchd.stderr[-12000:] or '<no output>', flush=True)
+    pid_match = re.search(r'\bpid = (\d+)', launchd.stdout)
+
+    deadline = time.monotonic() + 20
+    launchd_healthy = False
+    while time.monotonic() < deadline:
+        status = ui_service.service_status()
+        if status['healthy']:
+            launchd_healthy = True
+            elapsed = time.monotonic() - started_at
+            print(f'macOS launchd service became healthy after {elapsed:.1f}s: {status}', flush=True)
+            break
+        time.sleep(0.5)
+    else:
+        elapsed = time.monotonic() - started_at
+        print(f'macOS launchd service still unhealthy after {elapsed:.1f}s', flush=True)
+
+    if pid_match:
+        pid = pid_match.group(1)
+        _print_command_diagnostic(
+            'macOS launchd process',
+            ['/bin/ps', '-ww', '-o', 'pid,ppid,state,etime,time,wchan,command', '-p', pid],
+            timeout=5,
+        )
+        if launchd_healthy:
+            return
+        _print_command_diagnostic(
+            'macOS launchd process sample', ['/usr/bin/sample', pid, '3', '1'], timeout=8
+        )
+    else:
+        print('macOS launchd process: no PID reported', flush=True)
+
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        direct_port = probe.getsockname()[1]
+    command = [sys.executable, str(launcher), 'ui', '--all-projects', '--no-browser',
+               '--host', '127.0.0.1', '--port', str(direct_port),
+               '--codex-home', str(codex)]
+    direct = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    direct_healthy = False
+    try:
+        direct_deadline = time.monotonic() + 10
+        while direct.poll() is None and time.monotonic() < direct_deadline:
+            if ui_service._healthy(direct_port, direct.pid):
+                direct_healthy = True
+                break
+            time.sleep(0.2)
+    finally:
+        if direct.poll() is None:
+            direct.terminate()
+        try:
+            output = direct.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            direct.kill()
+            output = direct.communicate(timeout=5)[0]
+    print(f'macOS direct launcher healthy={direct_healthy} exit={direct.returncode} '
+          f'launchd_port={failed_port} direct_port={direct_port}', flush=True)
+    print(output[-12000:] if output else '<no output>', flush=True)
 
 
 @unittest.skipUnless(os.environ.get('ORCHESTRA_NATIVE_UI_TEST') == '1',
@@ -55,6 +132,7 @@ class NativeUiServiceTests(unittest.TestCase):
             with socket.socket() as probe:
                 probe.bind(('127.0.0.1', 0))
                 port = probe.getsockname()[1]
+            started_at = time.monotonic()
             try:
                 first = ui_service.install_service(skill, root / 'codex', port=port)
                 self.assertTrue(first['healthy'], first)
@@ -75,7 +153,11 @@ class NativeUiServiceTests(unittest.TestCase):
                 # These are disposable test services with synthetic data only.
                 if sys.platform == 'darwin':
                     log = ui_service._paths(Path.home())[2]
-                    print(ui_service._launchctl('print', ui_service._target(), required=False).stdout, flush=True)
+                    try:
+                        _diagnose_macos_startup(started_at, skill / 'scripts/orchestra.py',
+                                                root / 'codex', port)
+                    except Exception as diagnostic_error:
+                        print(f'macOS failure diagnostics failed: {diagnostic_error}', flush=True)
                 elif sys.platform == 'linux':
                     from orchestra_kit.ui_service_linux import _paths
                     log = _paths(Path.home())[2]

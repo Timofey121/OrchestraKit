@@ -9,6 +9,7 @@ import locale
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -178,7 +179,7 @@ def _task_python() -> Path:
 
 
 def _task_source(sid: str, runner: Path, working_directory: Path,
-                 python_executable: Path) -> str:
+                 python_executable: Path) -> bytes:
     ET.register_namespace("", TASK_NAMESPACE)
     task = ET.Element(f"{{{TASK_NAMESPACE}}}Task", {"version": "1.2"})
     registration = _element(task, "RegistrationInfo")
@@ -217,7 +218,7 @@ def _task_source(sid: str, runner: Path, working_directory: Path,
     _element(execute, "Arguments", subprocess.list2cmdline([str(runner)]))
     _element(execute, "WorkingDirectory", str(working_directory))
     ET.indent(task, space="  ")
-    return ET.tostring(task, encoding="unicode", xml_declaration=True) + "\n"
+    return ET.tostring(task, encoding="utf-16", xml_declaration=True) + "\n".encode("utf-16-le")
 
 
 def _runner_source(launcher: Path, codex_home: Path, paths: ServicePaths, port: int) -> str:
@@ -283,6 +284,30 @@ def _only(root: ET.Element, path: str) -> ET.Element:
     return found[0]
 
 
+def _child_names(element: ET.Element) -> list[str]:
+    prefix = f"{{{TASK_NAMESPACE}}}"
+    names = []
+    for child in element:
+        if not child.tag.startswith(prefix):
+            raise ValueError("unexpected task namespace")
+        names.append(child.tag[len(prefix):])
+    return names
+
+
+def _check_children(element: ET.Element, required: set[str], optional: set[str] = frozenset()) -> None:
+    names = _child_names(element)
+    if len(names) != len(set(names)) or set(names) - required - optional or not required <= set(names):
+        raise ValueError("unexpected task fields")
+
+
+def _optional_default(root: ET.Element, path: str, expected: str) -> None:
+    found = root.findall(path, {"t": TASK_NAMESPACE})
+    if len(found) > 1:
+        raise ValueError("duplicate task default")
+    if found and (found[0].text or "").strip().lower() != expected.lower():
+        raise ValueError("nondefault task constraint")
+
+
 def _task_signature(source: str | bytes) -> dict[str, str]:
     try:
         root = ET.fromstring(source)
@@ -296,7 +321,7 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
                 or [child.tag for child in actions] != [f"{{{TASK_NAMESPACE}}}Exec"]):
             raise ValueError("unexpected task trigger, principal, or action")
         principal = _only(root, "t:Principals/t:Principal")
-        _only(root, "t:Triggers/t:LogonTrigger")
+        trigger = _only(root, "t:Triggers/t:LogonTrigger")
         execute = _only(root, "t:Actions/t:Exec")
         if (principal.get("id") != "OrchestraKitUser"
                 or actions.get("Context") != "OrchestraKitUser"):
@@ -308,6 +333,45 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
         ]
         if [child.tag for child in execute] != expected_exec_children:
             raise ValueError("unexpected task execution fields")
+        registration = _only(root, "t:RegistrationInfo")
+        settings = _only(root, "t:Settings")
+        _check_children(registration, {"Description"}, {"URI"})
+        _check_children(trigger, {"Enabled", "UserId"}, {"Delay", "ExecutionTimeLimit"})
+        _check_children(principal, {"UserId", "LogonType", "RunLevel"}, {"ProcessTokenSidType"})
+        _check_children(settings, {
+            "MultipleInstancesPolicy", "DisallowStartIfOnBatteries",
+            "StopIfGoingOnBatteries", "AllowHardTerminate", "StartWhenAvailable",
+            "RunOnlyIfNetworkAvailable", "AllowStartOnDemand", "Enabled", "Hidden",
+            "RunOnlyIfIdle", "WakeToRun", "ExecutionTimeLimit", "Priority",
+            "RestartOnFailure",
+        }, {
+            "IdleSettings", "DeleteExpiredTaskAfter", "UseUnifiedSchedulingEngine",
+            "DisallowStartOnRemoteAppSession", "Volatile",
+        })
+        restart = _only(root, "t:Settings/t:RestartOnFailure")
+        _check_children(restart, {"Interval", "Count"})
+        _optional_default(root, "t:Triggers/t:LogonTrigger/t:Delay", "PT0M")
+        _optional_default(root, "t:Triggers/t:LogonTrigger/t:ExecutionTimeLimit", "PT72H")
+        _optional_default(root, "t:Principals/t:Principal/t:ProcessTokenSidType", "None")
+        for field, value in (
+            ("DeleteExpiredTaskAfter", "PT0S"),
+            ("UseUnifiedSchedulingEngine", "false"),
+            ("DisallowStartOnRemoteAppSession", "false"),
+            ("Volatile", "false"),
+        ):
+            _optional_default(root, f"t:Settings/t:{field}", value)
+        idle = root.findall("t:Settings/t:IdleSettings", {"t": TASK_NAMESPACE})
+        if len(idle) > 1:
+            raise ValueError("duplicate idle settings")
+        if idle:
+            _check_children(idle[0], set(), {
+                "Duration", "WaitTimeout", "StopOnIdleEnd", "RestartOnIdle",
+            })
+            for field, value in (
+                ("Duration", "PT10M"), ("WaitTimeout", "PT1H"),
+                ("StopOnIdleEnd", "true"), ("RestartOnIdle", "false"),
+            ):
+                _optional_default(root, f"t:Settings/t:IdleSettings/t:{field}", value)
         values = {
             "description": "t:RegistrationInfo/t:Description",
             "trigger_enabled": "t:Triggers/t:LogonTrigger/t:Enabled",
@@ -318,10 +382,16 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
             "multiple_instances": "t:Settings/t:MultipleInstancesPolicy",
             "battery_start": "t:Settings/t:DisallowStartIfOnBatteries",
             "battery_stop": "t:Settings/t:StopIfGoingOnBatteries",
+            "hard_terminate": "t:Settings/t:AllowHardTerminate",
             "start_available": "t:Settings/t:StartWhenAvailable",
+            "network_required": "t:Settings/t:RunOnlyIfNetworkAvailable",
             "start_demand": "t:Settings/t:AllowStartOnDemand",
             "enabled": "t:Settings/t:Enabled",
+            "hidden": "t:Settings/t:Hidden",
+            "idle_required": "t:Settings/t:RunOnlyIfIdle",
+            "wake": "t:Settings/t:WakeToRun",
             "execution_limit": "t:Settings/t:ExecutionTimeLimit",
+            "priority": "t:Settings/t:Priority",
             "restart_interval": "t:Settings/t:RestartOnFailure/t:Interval",
             "restart_count": "t:Settings/t:RestartOnFailure/t:Count",
             "command": "t:Actions/t:Exec/t:Command",
@@ -342,10 +412,16 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
                 or signature["multiple_instances"] != "IgnoreNew"
                 or signature["battery_start"].lower() != "false"
                 or signature["battery_stop"].lower() != "false"
+                or signature["hard_terminate"].lower() != "true"
                 or signature["start_available"].lower() != "true"
+                or signature["network_required"].lower() != "false"
                 or signature["start_demand"].lower() != "true"
                 or signature["enabled"].lower() != "true"
+                or signature["hidden"].lower() != "false"
+                or signature["idle_required"].lower() != "false"
+                or signature["wake"].lower() != "false"
                 or signature["execution_limit"] != "PT0S"
+                or signature["priority"] != "7"
                 or signature["restart_interval"] != "PT1M"
                 or signature["restart_count"] != "255"):
             raise ValueError("unsafe task settings")
@@ -457,6 +533,20 @@ def _base_status() -> dict[str, bool]:
     return {"supported": True, "installed": False, "running": False, "healthy": False}
 
 
+def _refuse_orphaned_process(paths: ServicePaths, port: int) -> None:
+    pid = _read_pid(paths.pid)
+    if pid is not None and _pid_running(pid):
+        raise ValueError(
+            f"UI task registration is missing but recorded PID {pid} is still active; "
+            "preserving the owned files for inspection"
+        )
+    if _listening(port):
+        raise ValueError(
+            f"UI task registration is missing and port {port} is occupied; "
+            "preserving the owned files for inspection"
+        )
+
+
 def service_status(*, home: Path | None = None):
     if sys.platform != "win32":
         return {"supported": False, "installed": False, "running": False, "healthy": False}
@@ -484,15 +574,31 @@ def service_status(*, home: Path | None = None):
             "task_xml": str(paths.task_xml), "runner": str(paths.runner), "log": str(paths.log)}
 
 
-def _write_installation(paths: ServicePaths, task_source: str, runner_source: str,
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, prefix=".orchestra-",
+                                     delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.close()
+            temporary.replace(path)
+        finally:
+            handle.close()
+            temporary.unlink(missing_ok=True)
+
+
+def _write_installation(paths: ServicePaths, task_source: bytes, runner_source: str,
                         launcher: Path, codex_home: Path, sid: str, port: int,
                         python_executable: Path) -> None:
     paths.directory.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(paths.log, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     os.close(descriptor)
-    _atomic_write(paths.task_xml, task_source)
+    _atomic_write_bytes(paths.task_xml, task_source)
     _atomic_write(paths.runner, runner_source)
-    task_data = task_source.encode("utf-8")
+    task_data = task_source
     runner_data = runner_source.encode("utf-8")
     owner = {
         "generated_by": "OrchestraKit",
@@ -562,6 +668,8 @@ def install_service(skill: Path, codex_home: Path, *, home: Path | None = None, 
                     raise ValueError(
                         f"UI port {port} is occupied; stop the manual server or choose another --port"
                     )
+            else:
+                _refuse_orphaned_process(paths, port)
         if registered is None:
             _schtasks("/create", "/tn", task_name, "/xml", str(paths.task_xml), "/hresult")
             registered = _query_task(task_name)
@@ -621,6 +729,8 @@ def uninstall_service(*, home: Path | None = None):
                             "owned UI process did not stop after Task Scheduler end; preserving the task and files"
                         )
                 _schtasks("/delete", "/tn", task_name, "/f", "/hresult")
+            else:
+                _refuse_orphaned_process(paths, int(owner["port"]))
             for path in (paths.task_xml, paths.runner, paths.manifest, paths.pid):
                 path.unlink(missing_ok=True)
     return {**_base_status(), "log": str(paths.log)}
