@@ -162,8 +162,9 @@ class NativeUiServiceTests(unittest.TestCase):
                     from orchestra_kit.ui_service_linux import _paths
                     log = _paths(Path.home())[2]
                 else:
-                    from orchestra_kit.ui_service_windows import _paths
-                    log = _paths().log
+                    from orchestra_kit import ui_service_windows as windows
+                    log = windows._paths().log
+                    print(windows._query_task(windows._task_name(windows._current_user_sid())), flush=True)
                 if log.exists():
                     print(log.read_text(encoding='utf-8', errors='replace')[-8000:], flush=True)
                 raise
