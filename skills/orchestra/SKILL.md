@@ -62,9 +62,16 @@ repair matter, use the native CLI runner described in
 
 ## Verify and finish
 
-For repeated remote status checks, use an available read-only connector or a
-bounded watcher; batch independent observations. Run local work within the
-existing sandbox and request escalation only when that operation requires it.
+Choose the tool for each operation before requesting more access. Prefer an
+available read-only connector for remote reads it supports, including CI status
+and logs; retain its own access checks. Run local inspection and checks in the
+existing sandbox. Separate independent reads from installation, publication,
+network or protected writes so one restricted step does not elevate the whole
+phase. Inspect a denial before retrying; request only the access that step needs.
+Use `setup --check` to inspect an installed bundle; current `setup` and
+`install-skill` also return without writes. Batch independent observations and
+use a bounded watcher when a suitable connector is unavailable. For execution
+alternatives and evidence limits, see [execution](references/execution.md).
 Keep genuine approval requests and user questions visible. Third-party monitors
 may label automatic approval review as waiting for a person; reducing redundant
 checks does not correct that monitor's event classification.

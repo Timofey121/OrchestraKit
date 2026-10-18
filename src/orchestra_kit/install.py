@@ -147,6 +147,8 @@ def install_skill(kit_root: Path, skills_dir: Path, *, codex_home: Path | None =
     skill, outputs, owned, bootstrap = _prepare_skill_install(
         kit_root, skills_dir, codex_home
     )
+    if not check_skill(kit_root, skills_dir, codex_home=codex_home):
+        return skill
     _apply_skill_install(skill, outputs, owned, bootstrap)
     return skill
 
@@ -161,6 +163,8 @@ def install_user_setup(kit_root: Path, skills_dir: Path, codex_home: Path) -> Pa
     if not isinstance(source, str):
         raise ProjectError("canonical skill source must be UTF-8 text")
     hook_outputs = prepare_hooks(codex_home, skill, source=source)
+    if not check_user_setup(kit_root, skills_dir, codex_home):
+        return skill
     _apply_skill_install(skill, outputs, owned, bootstrap)
     for path, content in hook_outputs.items():
         _atomic_write(path, content)
@@ -197,7 +201,11 @@ def check_skill(kit_root: Path, skills_dir: Path, *, codex_home: Path | None = N
             continue
         if not target.is_file() or _payload_digest(target.read_bytes()) != _payload_digest(content):
             errors.append(f"missing or drifted skill file: {relative}")
-    if owned != {p: _payload_digest(t) for p, t in outputs.items()}:
+    expected_files = {p: _payload_digest(t) for p, t in outputs.items()}
+    expected_manifest = json.dumps({
+        "generated_by": "OrchestraKit", "files": expected_files,
+    }, indent=2) + "\n"
+    if owned != expected_files or _skill_path(skill, MANIFEST).read_bytes() != expected_manifest.encode('utf-8'):
         errors.append("skill manifest differs from this kit")
     if codex_home is not None:
         from .bootstrap import check_bootstrap

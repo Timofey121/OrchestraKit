@@ -9,6 +9,30 @@ explicit configured model and effort, actual checks, and bounded repair. Keep
 small coupled work in the root. The runner uses the authenticated Codex CLI;
 it does not select or replace the current chat's root model.
 
+## Choosing an execution tool
+
+Use the host's leaf-agent tools when they provide the required role, model,
+effort and sandbox and root can retain the required checks and review evidence.
+Use the CLI runner when its configured launch, receipts or recovery controller
+are needed. Do not launch a nested CLI merely to reproduce an available host
+operation. Neither choice grants permission beyond the host boundary.
+
+| Operation | Execution path |
+|---|---|
+| Read CI jobs or logs | Available repository connector with the same repository, run and attempt; paginate where needed. Otherwise use the supported CLI with its required permissions. |
+| Inspect sources or run local checks | Existing sandbox; keep temporary output in permitted locations. A read-only reviewer reports writable verification to root. |
+| Inspect installed Orchestra | `setup --check`. A current `setup` or `install-skill` verifies the bundle and returns without rewriting it. Changed installations still require write access. |
+| Check a running UI | Keep the live health check. If loopback is denied, an available authorized browser can read the same endpoint; a PID or an old log alone does not establish health. |
+| Install hooks/services, write protected Git metadata or publish | Preserve the required permission check for the specific operation. Stage and inspect changes locally first. |
+
+Do not move a denied command into a background service, proxy or different
+wrapper to evade its permission check. A connector's supported read operation
+uses that connector's own access policy; it is not a general shell executor.
+Record unavailable verification as unavailable rather than replacing real
+filesystem, network or service checks with mocks. Tool choice can avoid an
+unnecessary sandbox-boundary request, but cannot correct a third-party monitor's
+classification of requests that still occur.
+
 ```text
 execute PROJECT --input JOB.json --dry-run
 execute PROJECT --input JOB.json --timeout 180

@@ -94,6 +94,76 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(user_file.read_text(), "mine")
         self.assertEqual(self.check(self.kit, self.skills), ())
 
+    def test_current_install_succeeds_with_all_filesystem_writes_denied(self) -> None:
+        from orchestra_kit.install import install_user_setup
+
+        codex = self.root / 'codex'
+        skill = install_user_setup(self.kit, self.skills, codex)
+        script = '''
+import os
+import sys
+from pathlib import Path
+from orchestra_kit.install import check_user_setup, install_skill, install_user_setup
+
+mode, kit, skills, codex = sys.argv[1:]
+kit, skills, codex = map(Path, (kit, skills, codex))
+assert check_user_setup(kit, skills, codex) == ()
+
+def deny_writes(event, args):
+    if event == 'open' and args[2] & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
+        raise PermissionError('filesystem writes denied during current installation')
+    if event in {'os.mkdir', 'os.remove', 'os.rename', 'os.rmdir', 'os.chmod', 'os.chown', 'os.utime', 'os.link', 'os.symlink'}:
+        raise PermissionError('filesystem mutation denied during current installation')
+
+sys.addaudithook(deny_writes)
+if mode == 'setup':
+    result = install_user_setup(kit, skills, codex)
+else:
+    result = install_skill(kit, skills, codex_home=codex)
+assert result == (skills / 'orchestra').resolve()
+assert check_user_setup(kit, skills, codex) == ()
+'''
+        environment = dict(os.environ, PYTHONPATH=str(self.kit / 'src'))
+        before = {path: (path.stat().st_mtime_ns, path.read_bytes())
+                  for directory in (skill, codex) for path in directory.rglob('*') if path.is_file()}
+        for mode in ('setup', 'install-skill'):
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    [sys.executable, '-B', '-c', script, mode, str(self.kit), str(self.skills), str(codex)],
+                    env=environment, cwd=self.root, text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+        after = {path: (path.stat().st_mtime_ns, path.read_bytes())
+                 for directory in (skill, codex) for path in directory.rglob('*') if path.is_file()}
+        self.assertEqual(after, before)
+
+    def test_setup_rechecks_content_before_skipping_writes(self) -> None:
+        from orchestra_kit.install import check_user_setup, install_user_setup
+
+        codex = self.root / 'codex'
+        skill = install_user_setup(self.kit, self.skills, codex)
+        for target in (skill / 'scripts/orchestra.py', skill / '.orchestra-skill-manifest.json',
+                       codex / 'AGENTS.md', codex / 'hooks.json'):
+            with self.subTest(path=target.name):
+                original = target.read_bytes()
+                stat = target.stat()
+                if target.name == '.orchestra-skill-manifest.json':
+                    value = json.loads(original)
+                    value['unexpected'] = True
+                    target.write_text(json.dumps(value))
+                elif target.name == 'hooks.json':
+                    target.write_text(json.dumps(json.loads(original)))
+                elif target.name == 'AGENTS.md':
+                    target.write_bytes(original.replace(b'primary workflow', b'outdated workflow'))
+                else:
+                    target.write_bytes(original.replace(b'import', b'broken', 1))
+                self.assertNotEqual(target.read_bytes(), original)
+                os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                self.assertTrue(check_user_setup(self.kit, self.skills, codex))
+                self.assertEqual(install_user_setup(self.kit, self.skills, codex), skill)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertEqual(check_user_setup(self.kit, self.skills, codex), ())
+
     def test_refuses_unowned_skill_without_mutation(self) -> None:
         from orchestra_kit.project import ProjectError
         target = self.skills / "orchestra"
