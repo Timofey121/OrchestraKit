@@ -122,7 +122,7 @@ class UiServiceTests(unittest.TestCase):
         service.uninstall_service(home=self.home)
 
     def test_unsupported_platform_is_explicit_without_writes(self):
-        with patch.object(service.sys, 'platform', 'linux'):
+        with patch.object(service.sys, 'platform', 'freebsd'):
             self.assertFalse(service.service_status(home=self.home)['supported'])
             with self.assertRaisesRegex(ValueError, 'macOS'):
                 self.install()

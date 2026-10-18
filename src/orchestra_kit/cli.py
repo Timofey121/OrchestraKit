@@ -49,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     ui.add_argument('--no-browser', action='store_true')
     ui.add_argument('--all-projects', action='store_true', help='Use Codex project discovery without adding the working directory')
 
-    autostart = commands.add_parser('ui-autostart', help='Manage the macOS user dashboard service')
+    autostart = commands.add_parser('ui-autostart', help='Manage the user dashboard service (macOS, Windows, systemd Linux)')
     autostart.add_argument('action', choices=('install', 'status', 'uninstall'))
     autostart.add_argument('--skills-dir', default=str(Path.home() / '.agents/skills'))
     autostart.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))

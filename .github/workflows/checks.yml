@@ -34,6 +34,17 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest discover -s tests -v
+      - name: Start disposable Linux user manager
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Real dashboard service lifecycle
+        env:
+          PYTHONPATH: src
+          ORCHESTRA_NATIVE_UI_TEST: '1'
+        run: python -m unittest tests.test_ui_service_native -v
       - name: Frontend checks and build
         working-directory: frontend
         run: |
@@ -65,4 +76,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Installation and dashboard smoke test
-        run: python -m unittest tests.test_portability tests.test_state tests.test_check_portability tests.test_file_metadata tests.test_diagnostics tests.test_workflow_comparison tests.test_stage1_cli tests.test_repair_context tests.test_memory tests.test_navigation tests.test_handoff tests.test_stage2_cli tests.test_consultation tests.test_consultation_cli tests.test_questions tests.test_questions_cli -v
+        run: python -m unittest tests.test_portability tests.test_state tests.test_check_portability tests.test_file_metadata tests.test_diagnostics tests.test_workflow_comparison tests.test_stage1_cli tests.test_repair_context tests.test_memory tests.test_navigation tests.test_handoff tests.test_stage2_cli tests.test_consultation tests.test_consultation_cli tests.test_questions tests.test_questions_cli tests.test_ui_service_windows -v
+      - name: Real Windows dashboard service lifecycle
+        env:
+          ORCHESTRA_NATIVE_UI_TEST: '1'
+        run: python -m unittest tests.test_ui_service_native -v

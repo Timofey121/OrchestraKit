@@ -1,4 +1,4 @@
-"""User-owned macOS launch agent for the shared loopback dashboard."""
+"""User-owned platform services for the shared loopback dashboard."""
 from __future__ import annotations
 
 import hashlib
@@ -110,6 +110,8 @@ def _lock(directory):
 
 
 def service_status(*, home: Path | None = None):
+    if sys.platform in ('linux', 'win32'):
+        return _backend().service_status(home=home)
     if sys.platform != 'darwin':
         return {'supported': False, 'installed': False, 'running': False, 'healthy': False}
     plist, manifest, log = _paths(home or Path.home())
@@ -128,8 +130,10 @@ def service_status(*, home: Path | None = None):
 
 
 def install_service(skill: Path, codex_home: Path, *, home: Path | None = None, port: int = 8731):
+    if sys.platform in ('linux', 'win32'):
+        return _backend().install_service(skill, codex_home, home=home, port=port)
     if sys.platform != 'darwin':
-        raise ValueError('UI autostart service requires macOS; use orchestra ui on this platform')
+        raise ValueError('UI autostart requires macOS, Windows or systemd Linux; use orchestra ui on this platform')
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError('UI service port must be an integer from 1 to 65535')
     home = (home or Path.home()).expanduser().resolve()
@@ -177,6 +181,8 @@ def install_service(skill: Path, codex_home: Path, *, home: Path | None = None, 
 
 
 def uninstall_service(*, home: Path | None = None):
+    if sys.platform in ('linux', 'win32'):
+        return _backend().uninstall_service(home=home)
     if sys.platform != 'darwin':
         raise ValueError('UI autostart service requires macOS')
     home = home or Path.home()
@@ -189,3 +195,11 @@ def uninstall_service(*, home: Path | None = None):
             manifest.unlink()
     return {'supported': True, 'installed': False, 'running': False, 'healthy': False,
             'log': str(log)}
+
+
+def _backend():
+    if sys.platform == 'linux':
+        from . import ui_service_linux
+        return ui_service_linux
+    from . import ui_service_windows
+    return ui_service_windows
