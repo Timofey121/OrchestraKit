@@ -24,6 +24,7 @@ TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 DESCRIPTION = "OrchestraKit per-user UI service"
 _MAX_CONFIG_SIZE = 128 * 1024
 _SCHED_E_TASK_NOT_RUNNING = 0x8004130B
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,57 @@ def _current_user_sid() -> str:
     if not sid.startswith("S-") or not all(part.isdigit() for part in sid[2:].split("-")):
         raise ValueError("cannot parse the current Windows user SID")
     return sid
+
+
+def _is_sid(value: str) -> bool:
+    return value.startswith("S-") and all(part.isdigit() for part in value[2:].split("-"))
+
+
+def _account_name_for_sid(sid: str) -> str:
+    """Resolve an owned SID to its canonical local/domain account name."""
+    if sys.platform != "win32" or not _is_sid(sid):
+        raise ValueError("cannot resolve an invalid Windows user SID")
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        convert = advapi32.ConvertStringSidToSidW
+        convert.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID)]
+        convert.restype = wintypes.BOOL
+        lookup = advapi32.LookupAccountSidW
+        lookup.argtypes = [
+            wintypes.LPCWSTR, wintypes.LPVOID, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+        ]
+        lookup.restype = wintypes.BOOL
+        kernel32.LocalFree.argtypes = [wintypes.LPVOID]
+        kernel32.LocalFree.restype = wintypes.LPVOID
+
+        sid_pointer = wintypes.LPVOID()
+        if not convert(sid, ctypes.byref(sid_pointer)):
+            raise ValueError("cannot resolve the Windows user SID")
+        try:
+            name_size = wintypes.DWORD()
+            domain_size = wintypes.DWORD()
+            sid_type = wintypes.DWORD()
+            ctypes.set_last_error(0)
+            lookup(None, sid_pointer, None, ctypes.byref(name_size), None,
+                   ctypes.byref(domain_size), ctypes.byref(sid_type))
+            if ctypes.get_last_error() != 122 or not name_size.value:
+                raise ValueError("cannot resolve the Windows user SID")
+            name = ctypes.create_unicode_buffer(name_size.value)
+            domain = ctypes.create_unicode_buffer(max(domain_size.value, 1))
+            if not lookup(None, sid_pointer, name, ctypes.byref(name_size), domain,
+                          ctypes.byref(domain_size), ctypes.byref(sid_type)):
+                raise ValueError("cannot resolve the Windows user SID")
+            return f"{domain.value}\\{name.value}" if domain.value else name.value
+        finally:
+            kernel32.LocalFree(sid_pointer)
+    except (AttributeError, OSError) as exc:
+        raise ValueError("cannot resolve the Windows user SID") from exc
 
 
 def _element(parent: ET.Element, name: str, text: str | None = None, **attributes: str) -> ET.Element:
@@ -308,6 +360,19 @@ def _optional_default(root: ET.Element, path: str, expected: str) -> None:
         raise ValueError("nondefault task constraint")
 
 
+def _text(root: ET.Element, path: str, default: object = _MISSING) -> str:
+    found = root.findall(path, {"t": TASK_NAMESPACE})
+    if len(found) > 1:
+        raise ValueError("duplicate task value")
+    if not found:
+        if default is _MISSING:
+            raise ValueError("missing task value")
+        return str(default)
+    if found[0].text is None or not found[0].text.strip():
+        raise ValueError("empty task value")
+    return found[0].text.strip()
+
+
 def _task_signature(source: str | bytes) -> dict[str, str]:
     try:
         root = ET.fromstring(source)
@@ -335,16 +400,21 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
             raise ValueError("unexpected task execution fields")
         registration = _only(root, "t:RegistrationInfo")
         settings = _only(root, "t:Settings")
+        _check_children(root, {
+            "RegistrationInfo", "Triggers", "Principals", "Settings", "Actions",
+        })
         _check_children(registration, {"Description"}, {"URI"})
-        _check_children(trigger, {"Enabled", "UserId"}, {"Delay", "ExecutionTimeLimit"})
-        _check_children(principal, {"UserId", "LogonType", "RunLevel"}, {"ProcessTokenSidType"})
+        _check_children(trigger, {"UserId"}, {"Enabled", "Delay", "ExecutionTimeLimit"})
+        _check_children(principal, {"UserId", "LogonType"}, {
+            "RunLevel", "ProcessTokenSidType",
+        })
         _check_children(settings, {
-            "MultipleInstancesPolicy", "DisallowStartIfOnBatteries",
-            "StopIfGoingOnBatteries", "AllowHardTerminate", "StartWhenAvailable",
-            "RunOnlyIfNetworkAvailable", "AllowStartOnDemand", "Enabled", "Hidden",
-            "RunOnlyIfIdle", "WakeToRun", "ExecutionTimeLimit", "Priority",
-            "RestartOnFailure",
+            "DisallowStartIfOnBatteries", "StopIfGoingOnBatteries",
+            "StartWhenAvailable", "ExecutionTimeLimit", "RestartOnFailure",
         }, {
+            "MultipleInstancesPolicy", "AllowHardTerminate", "RunOnlyIfNetworkAvailable",
+            "AllowStartOnDemand", "Enabled", "Hidden", "RunOnlyIfIdle", "WakeToRun",
+            "Priority",
             "IdleSettings", "DeleteExpiredTaskAfter", "UseUnifiedSchedulingEngine",
             "DisallowStartOnRemoteAppSession", "Volatile",
         })
@@ -373,40 +443,50 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
             ):
                 _optional_default(root, f"t:Settings/t:IdleSettings/t:{field}", value)
         values = {
-            "description": "t:RegistrationInfo/t:Description",
-            "trigger_enabled": "t:Triggers/t:LogonTrigger/t:Enabled",
-            "trigger_user": "t:Triggers/t:LogonTrigger/t:UserId",
-            "principal_user": "t:Principals/t:Principal/t:UserId",
-            "logon_type": "t:Principals/t:Principal/t:LogonType",
-            "run_level": "t:Principals/t:Principal/t:RunLevel",
-            "multiple_instances": "t:Settings/t:MultipleInstancesPolicy",
-            "battery_start": "t:Settings/t:DisallowStartIfOnBatteries",
-            "battery_stop": "t:Settings/t:StopIfGoingOnBatteries",
-            "hard_terminate": "t:Settings/t:AllowHardTerminate",
-            "start_available": "t:Settings/t:StartWhenAvailable",
-            "network_required": "t:Settings/t:RunOnlyIfNetworkAvailable",
-            "start_demand": "t:Settings/t:AllowStartOnDemand",
-            "enabled": "t:Settings/t:Enabled",
-            "hidden": "t:Settings/t:Hidden",
-            "idle_required": "t:Settings/t:RunOnlyIfIdle",
-            "wake": "t:Settings/t:WakeToRun",
-            "execution_limit": "t:Settings/t:ExecutionTimeLimit",
-            "priority": "t:Settings/t:Priority",
-            "restart_interval": "t:Settings/t:RestartOnFailure/t:Interval",
-            "restart_count": "t:Settings/t:RestartOnFailure/t:Count",
-            "command": "t:Actions/t:Exec/t:Command",
-            "arguments": "t:Actions/t:Exec/t:Arguments",
-            "working_directory": "t:Actions/t:Exec/t:WorkingDirectory",
+            "description": ("t:RegistrationInfo/t:Description", _MISSING),
+            "trigger_enabled": ("t:Triggers/t:LogonTrigger/t:Enabled", "true"),
+            "trigger_user": ("t:Triggers/t:LogonTrigger/t:UserId", _MISSING),
+            "principal_user": ("t:Principals/t:Principal/t:UserId", _MISSING),
+            "logon_type": ("t:Principals/t:Principal/t:LogonType", _MISSING),
+            # Task Scheduler omits LeastPrivilege from its canonical export.
+            "run_level": ("t:Principals/t:Principal/t:RunLevel", "LeastPrivilege"),
+            "multiple_instances": ("t:Settings/t:MultipleInstancesPolicy", "IgnoreNew"),
+            "battery_start": ("t:Settings/t:DisallowStartIfOnBatteries", _MISSING),
+            "battery_stop": ("t:Settings/t:StopIfGoingOnBatteries", _MISSING),
+            "hard_terminate": ("t:Settings/t:AllowHardTerminate", "true"),
+            "start_available": ("t:Settings/t:StartWhenAvailable", _MISSING),
+            "network_required": ("t:Settings/t:RunOnlyIfNetworkAvailable", "false"),
+            "start_demand": ("t:Settings/t:AllowStartOnDemand", "true"),
+            "enabled": ("t:Settings/t:Enabled", "true"),
+            "hidden": ("t:Settings/t:Hidden", "false"),
+            "idle_required": ("t:Settings/t:RunOnlyIfIdle", "false"),
+            "wake": ("t:Settings/t:WakeToRun", "false"),
+            "execution_limit": ("t:Settings/t:ExecutionTimeLimit", _MISSING),
+            "priority": ("t:Settings/t:Priority", "7"),
+            "restart_interval": ("t:Settings/t:RestartOnFailure/t:Interval", _MISSING),
+            "restart_count": ("t:Settings/t:RestartOnFailure/t:Count", _MISSING),
+            "command": ("t:Actions/t:Exec/t:Command", _MISSING),
+            "arguments": ("t:Actions/t:Exec/t:Arguments", _MISSING),
+            "working_directory": ("t:Actions/t:Exec/t:WorkingDirectory", _MISSING),
         }
-        signature: dict[str, str] = {}
-        for key, path in values.items():
-            element = _only(root, path)
-            if element.text is None:
-                raise ValueError("empty task value")
-            signature[key] = element.text.strip()
+        signature = {key: _text(root, path, default) for key, (path, default) in values.items()}
+        principal_sid = signature["principal_user"]
+        trigger_user = signature["trigger_user"]
+        if not _is_sid(principal_sid):
+            raise ValueError("invalid task principal SID")
+        if _is_sid(trigger_user):
+            same_user = trigger_user.casefold() == principal_sid.casefold()
+        else:
+            same_user = (
+                trigger_user.casefold() == _account_name_for_sid(principal_sid).casefold()
+            )
+        if not same_user:
+            raise ValueError("task trigger belongs to a different user")
+        # Scheduler may render the trigger identity as DOMAIN\user while
+        # retaining the principal SID. Canonicalize both forms to that SID.
+        signature["trigger_user"] = principal_sid
         if (signature["description"] != DESCRIPTION
                 or signature["trigger_enabled"].lower() != "true"
-                or signature["trigger_user"] != signature["principal_user"]
                 or signature["logon_type"] != "InteractiveToken"
                 or signature["run_level"] != "LeastPrivilege"
                 or signature["multiple_instances"] != "IgnoreNew"

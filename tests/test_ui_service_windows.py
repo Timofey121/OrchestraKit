@@ -6,6 +6,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
+from xml.sax.saxutils import escape
 
 from orchestra_kit import ui_service_windows as service
 
@@ -74,6 +75,60 @@ class UiServiceWindowsTests(unittest.TestCase):
 
     def install(self, **kwargs):
         return service.install_service(self.skill, self.codex, home=self.home, **kwargs)
+
+    def native_export(self, trigger_user=r"TESTDOMAIN\runner"):
+        """Mirror the normalized XML exported by Windows Server 2022 CI."""
+        root = ET.fromstring(service._paths(self.home).task_xml.read_bytes())
+        ns = {"t": service.TASK_NAMESPACE}
+
+        def value(path):
+            found = root.findtext(path, namespaces=ns)
+            self.assertIsNotNone(found, path)
+            return escape(found)
+
+        sid = value("t:Principals/t:Principal/t:UserId")
+        task_name = escape(service._task_name(sid))
+        return f'''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="{service.TASK_NAMESPACE}">
+  <RegistrationInfo>
+    <Description>{escape(service.DESCRIPTION)}</Description>
+    <URI>{task_name}</URI>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="OrchestraKitUser">
+      <UserId>{sid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>255</Count>
+      <Interval>PT1M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+  </Settings>
+  <Triggers>
+    <LogonTrigger>
+      <UserId>{escape(trigger_user)}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Actions Context="OrchestraKitUser">
+    <Exec>
+      <Command>{value("t:Actions/t:Exec/t:Command")}</Command>
+      <Arguments>{value("t:Actions/t:Exec/t:Arguments")}</Arguments>
+      <WorkingDirectory>{value("t:Actions/t:Exec/t:WorkingDirectory")}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+'''
 
     def test_install_registers_per_user_logon_task_and_same_pid_runner(self):
         result = self.install(port=9876)
@@ -352,6 +407,55 @@ class UiServiceWindowsTests(unittest.TestCase):
             "<Volatile>false</Volatile></Settings>",
         )
         self.assertEqual(service._task_signature(normalized), service._task_signature(source))
+
+    def test_native_scheduler_export_omissions_and_account_alias_are_normalized(self):
+        result = self.install()
+        expected = service._task_signature(Path(result["task_xml"]).read_bytes())
+        self.task_xml = self.native_export()
+
+        with patch.object(service, "_account_name_for_sid",
+                          return_value=r"TESTDOMAIN\runner") as account_name:
+            self.assertEqual(service._task_signature(self.task_xml), expected)
+            status = service.service_status(home=self.home)
+
+        self.assertTrue(status["installed"])
+        self.assertTrue(status["healthy"])
+        account_name.assert_called_with("S-1-5-21-123-456-789-1001")
+
+    def test_native_scheduler_export_account_alias_must_resolve_to_owner_sid(self):
+        self.install()
+        self.task_xml = self.native_export()
+        self.calls.clear()
+
+        with patch.object(service, "_account_name_for_sid",
+                          return_value=r"TESTDOMAIN\different-user"):
+            with self.assertRaisesRegex(ValueError, "registered task.*modified"):
+                service.uninstall_service(home=self.home)
+
+        self.assertFalse(any(part.lower() in ("/end", "/delete")
+                             for call in self.calls for part in call))
+
+    def test_native_scheduler_export_does_not_normalize_elevated_or_extra_privileges(self):
+        self.install()
+        native = self.native_export()
+        mutations = {
+            "elevated": ("</LogonType>",
+                         "</LogonType><RunLevel>HighestAvailable</RunLevel>"),
+            "extra privilege": ("</LogonType>",
+                                "</LogonType><RequiredPrivileges>"
+                                "<Privilege>SeDebugPrivilege</Privilege>"
+                                "</RequiredPrivileges>"),
+        }
+        for name, (before, after) in mutations.items():
+            with self.subTest(name=name):
+                self.task_xml = native.replace(before, after, 1)
+                self.calls.clear()
+                with patch.object(service, "_account_name_for_sid",
+                                  return_value=r"TESTDOMAIN\runner"):
+                    with self.assertRaisesRegex(ValueError, "registered task.*modified"):
+                        service.uninstall_service(home=self.home)
+                self.assertFalse(any(part.lower() in ("/end", "/delete")
+                                     for call in self.calls for part in call))
 
     def test_health_requires_pid_file_process_and_matching_dashboard_pid(self):
         first = self.install()
