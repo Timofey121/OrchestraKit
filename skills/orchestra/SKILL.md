@@ -62,6 +62,13 @@ repair matter, use the native CLI runner described in
 
 ## Verify and finish
 
+For repeated remote status checks, use an available read-only connector or a
+bounded watcher; batch independent observations. Run local work within the
+existing sandbox and request escalation only when that operation requires it.
+Keep genuine approval requests and user questions visible. Third-party monitors
+may label automatic approval review as waiting for a person; reducing redundant
+checks does not correct that monitor's event classification.
+
 Inspect relevant diffs, acceptance criteria, and actual check output. Obtain the
 configured independent reviews; report unresolved gates instead of inventing a
 pass. For substantial configured work, read [state](references/state.md) and keep

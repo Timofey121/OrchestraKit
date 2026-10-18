@@ -12,6 +12,7 @@ import math
 import mimetypes
 import os
 import socket
+import socketserver
 import secrets
 import hmac
 import sqlite3
@@ -1074,5 +1075,9 @@ def make_server(dashboard: Dashboard, host: str = "127.0.0.1", port: int = 0, st
 
     class Server(ThreadingHTTPServer):
         address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+        def server_bind(self) -> None:
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
 
     return Server((host, port), Handler)

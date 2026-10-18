@@ -527,3 +527,19 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(request("GET", "/../outside", Host="127.0.0.1:" + str(port))[0].status, 404)
         self.assertEqual(request("GET", "/room.png/../outside", Host="127.0.0.1:" + str(port))[0].status, 404)
         self.assertEqual(request("GET", "/style.css", Host="127.0.0.1:" + str(port))[0].status, 404)
+
+    def test_literal_loopback_server_bind_avoids_reverse_dns(self) -> None:
+        from unittest.mock import patch
+
+        module = importlib.import_module("orchestra_kit.dashboard")
+        with (patch("socketserver.TCPServer.server_bind"),
+              patch("socketserver.TCPServer.server_activate"),
+              patch.object(module.socket, "getfqdn", side_effect=AssertionError("reverse DNS attempted")) as getfqdn):
+            for host, family in (("127.0.0.1", module.socket.AF_INET), ("::1", module.socket.AF_INET6)):
+                with self.subTest(host=host):
+                    server = module.make_server(self.dashboard(), host=host, port=0)
+                    self.addCleanup(server.server_close)
+                    self.assertEqual(server.address_family, family)
+                    self.assertEqual(server.server_name, server.server_address[0])
+                    self.assertEqual(server.server_port, server.server_address[1])
+        getfqdn.assert_not_called()

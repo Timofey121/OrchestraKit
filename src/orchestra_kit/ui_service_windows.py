@@ -22,6 +22,7 @@ TASK_NAME_PREFIX = r"\OrchestraKit UI "
 TASK_NOT_FOUND_HRESULT = 0x80070002
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 DESCRIPTION = "OrchestraKit per-user UI service"
+RECOVERY_START_BOUNDARY = "2000-01-01T00:00:00"
 _MAX_CONFIG_SIZE = 128 * 1024
 _SCHED_E_TASK_NOT_RUNNING = 0x8004130B
 _MISSING = object()
@@ -240,6 +241,13 @@ def _task_source(sid: str, runner: Path, working_directory: Path,
     trigger = _element(triggers, "LogonTrigger")
     _element(trigger, "Enabled", "true")
     _element(trigger, "UserId", sid)
+    # RestartOnFailure only covers scheduler/action start failures. This
+    # indefinite one-minute trigger also relaunches an action that exited or
+    # was terminated; IgnoreNew keeps a healthy instance untouched.
+    recovery = _element(triggers, "TimeTrigger")
+    _element(recovery, "StartBoundary", RECOVERY_START_BOUNDARY)
+    repetition = _element(recovery, "Repetition")
+    _element(repetition, "Interval", "PT1M")
     principals = _element(task, "Principals")
     principal = _element(principals, "Principal", id="OrchestraKitUser")
     _element(principal, "UserId", sid)
@@ -373,7 +381,7 @@ def _text(root: ET.Element, path: str, default: object = _MISSING) -> str:
     return found[0].text.strip()
 
 
-def _task_signature(source: str | bytes) -> dict[str, str]:
+def _task_signature(source: str | bytes, *, allow_disabled: bool = False) -> dict[str, str]:
     try:
         root = ET.fromstring(source)
         if root.tag != f"{{{TASK_NAMESPACE}}}Task":
@@ -381,12 +389,15 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
         triggers = _only(root, "t:Triggers")
         principals = _only(root, "t:Principals")
         actions = _only(root, "t:Actions")
-        if ([child.tag for child in triggers] != [f"{{{TASK_NAMESPACE}}}LogonTrigger"]
+        trigger_names = _child_names(triggers)
+        if (sorted(trigger_names) != ["LogonTrigger", "TimeTrigger"]
                 or [child.tag for child in principals] != [f"{{{TASK_NAMESPACE}}}Principal"]
                 or [child.tag for child in actions] != [f"{{{TASK_NAMESPACE}}}Exec"]):
             raise ValueError("unexpected task trigger, principal, or action")
         principal = _only(root, "t:Principals/t:Principal")
         trigger = _only(root, "t:Triggers/t:LogonTrigger")
+        recovery = _only(root, "t:Triggers/t:TimeTrigger")
+        repetition = _only(root, "t:Triggers/t:TimeTrigger/t:Repetition")
         execute = _only(root, "t:Actions/t:Exec")
         if (principal.get("id") != "OrchestraKitUser"
                 or actions.get("Context") != "OrchestraKitUser"):
@@ -405,6 +416,10 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
         })
         _check_children(registration, {"Description"}, {"URI"})
         _check_children(trigger, {"UserId"}, {"Enabled", "Delay", "ExecutionTimeLimit"})
+        _check_children(recovery, {"StartBoundary", "Repetition"}, {
+            "Enabled", "ExecutionTimeLimit",
+        })
+        _check_children(repetition, {"Interval"}, {"StopAtDurationEnd"})
         _check_children(principal, {"UserId", "LogonType"}, {
             "RunLevel", "ProcessTokenSidType",
         })
@@ -422,6 +437,11 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
         _check_children(restart, {"Interval", "Count"})
         _optional_default(root, "t:Triggers/t:LogonTrigger/t:Delay", "PT0M")
         _optional_default(root, "t:Triggers/t:LogonTrigger/t:ExecutionTimeLimit", "PT72H")
+        _optional_default(root, "t:Triggers/t:TimeTrigger/t:Enabled", "true")
+        _optional_default(root, "t:Triggers/t:TimeTrigger/t:ExecutionTimeLimit", "PT72H")
+        _optional_default(
+            root, "t:Triggers/t:TimeTrigger/t:Repetition/t:StopAtDurationEnd", "false"
+        )
         _optional_default(root, "t:Principals/t:Principal/t:ProcessTokenSidType", "None")
         for field, value in (
             ("DeleteExpiredTaskAfter", "PT0S"),
@@ -446,6 +466,10 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
             "description": ("t:RegistrationInfo/t:Description", _MISSING),
             "trigger_enabled": ("t:Triggers/t:LogonTrigger/t:Enabled", "true"),
             "trigger_user": ("t:Triggers/t:LogonTrigger/t:UserId", _MISSING),
+            "recovery_start": ("t:Triggers/t:TimeTrigger/t:StartBoundary", _MISSING),
+            "recovery_interval": (
+                "t:Triggers/t:TimeTrigger/t:Repetition/t:Interval", _MISSING,
+            ),
             "principal_user": ("t:Principals/t:Principal/t:UserId", _MISSING),
             "logon_type": ("t:Principals/t:Principal/t:LogonType", _MISSING),
             # Task Scheduler omits LeastPrivilege from its canonical export.
@@ -487,6 +511,8 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
         signature["trigger_user"] = principal_sid
         if (signature["description"] != DESCRIPTION
                 or signature["trigger_enabled"].lower() != "true"
+                or signature["recovery_start"] != RECOVERY_START_BOUNDARY
+                or signature["recovery_interval"] != "PT1M"
                 or signature["logon_type"] != "InteractiveToken"
                 or signature["run_level"] != "LeastPrivilege"
                 or signature["multiple_instances"] != "IgnoreNew"
@@ -496,7 +522,8 @@ def _task_signature(source: str | bytes) -> dict[str, str]:
                 or signature["start_available"].lower() != "true"
                 or signature["network_required"].lower() != "false"
                 or signature["start_demand"].lower() != "true"
-                or signature["enabled"].lower() != "true"
+                or signature["enabled"].lower()
+                not in ({"true", "false"} if allow_disabled else {"true"})
                 or signature["hidden"].lower() != "false"
                 or signature["idle_required"].lower() != "false"
                 or signature["wake"].lower() != "false"
@@ -556,14 +583,19 @@ def _owned(paths: ServicePaths) -> dict[str, object] | None:
         ) from exc
 
 
-def _validate_registered(source: str, paths: ServicePaths) -> None:
+def _validate_registered(source: str, paths: ServicePaths, *,
+                         allow_disabled: bool = False) -> dict[str, str]:
     try:
-        registered = _task_signature(source)
+        registered = _task_signature(source, allow_disabled=allow_disabled)
         expected = _task_signature(paths.task_xml.read_bytes())
     except (OSError, ValueError) as exc:
         raise ValueError("registered task definition is modified; preserve and inspect it") from exc
-    if registered != expected:
+    comparison = registered
+    if allow_disabled and registered["enabled"].lower() == "false":
+        comparison = {**registered, "enabled": expected["enabled"]}
+    if comparison != expected:
         raise ValueError("registered task definition is modified; preserve and inspect it")
+    return registered
 
 
 def _read_pid(path: Path) -> int | None:
@@ -786,7 +818,23 @@ def uninstall_service(*, home: Path | None = None):
                 raise ValueError("UI Task Scheduler name already exists without Orchestra ownership")
         else:
             if registered is not None:
-                _validate_registered(registered, paths)
+                registered_signature = _validate_registered(
+                    registered, paths, allow_disabled=True,
+                )
+                if registered_signature["enabled"].lower() == "true":
+                    _schtasks("/change", "/tn", task_name, "/disable", "/hresult")
+                    registered = _query_task(task_name)
+                    if registered is None:
+                        raise ValueError(
+                            "Windows Task Scheduler lost the UI task while disabling it"
+                        )
+                    registered_signature = _validate_registered(
+                        registered, paths, allow_disabled=True,
+                    )
+                    if registered_signature["enabled"].lower() != "false":
+                        raise ValueError(
+                            "Windows Task Scheduler did not disable the UI task; preserving it"
+                        )
                 pid = _read_pid(paths.pid)
                 end = _schtasks("/end", "/tn", task_name, "/hresult", required=False)
                 end_code = end.returncode & 0xFFFFFFFF

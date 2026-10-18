@@ -128,6 +128,15 @@ def _diagnose_macos_startup(started_at, launcher, codex, failed_port):
           f'total_elapsed={time.monotonic() - started_at:.1f}s', flush=True)
 
 
+def _diagnose_windows_task(task_name):
+    """Print bounded, read-only scheduler state including Last Run Result."""
+    _print_command_diagnostic(
+        'Windows Task Scheduler verbose state',
+        ['schtasks.exe', '/query', '/tn', task_name, '/v', '/fo', 'list', '/hresult'],
+        timeout=10,
+    )
+
+
 @unittest.skipUnless(os.environ.get('ORCHESTRA_NATIVE_UI_TEST') == '1',
                      'requires explicit opt-in on a disposable OS account')
 class NativeUiServiceTests(unittest.TestCase):
@@ -175,7 +184,7 @@ class NativeUiServiceTests(unittest.TestCase):
                 second = ui_service.install_service(skill, root / 'codex', port=port)
                 self.assertEqual(first['pid'], second['pid'], 'idempotent install must not restart')
                 os.kill(first['pid'], signal.SIGTERM)
-                # Task Scheduler's shortest supported restart interval is one minute.
+                # Windows' recovery trigger checks once a minute; allow scheduling delay.
                 deadline = time.monotonic() + 100
                 while time.monotonic() < deadline:
                     recovered = ui_service.service_status()
@@ -200,7 +209,9 @@ class NativeUiServiceTests(unittest.TestCase):
                 else:
                     from orchestra_kit import ui_service_windows as windows
                     log = windows._paths().log
-                    print(windows._query_task(windows._task_name(windows._current_user_sid())), flush=True)
+                    task_name = windows._task_name(windows._current_user_sid())
+                    _diagnose_windows_task(task_name)
+                    print(windows._query_task(task_name), flush=True)
                 if log.exists():
                     print(log.read_text(encoding='utf-8', errors='replace')[-8000:], flush=True)
                 raise

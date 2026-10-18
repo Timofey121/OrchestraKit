@@ -65,6 +65,16 @@ class UiServiceWindowsTests(unittest.TestCase):
             paths = service._paths(self.home)
             paths.pid.write_text("4321\n", encoding="ascii")
             return subprocess.CompletedProcess(argv, 0, "", "")
+        if "/change" in lowered:
+            root = ET.fromstring(self.task_xml)
+            ns = {"t": service.TASK_NAMESPACE}
+            settings = root.find("t:Settings", ns)
+            enabled = settings.find("t:Enabled", ns)
+            if enabled is None:
+                enabled = ET.SubElement(settings, f"{{{service.TASK_NAMESPACE}}}Enabled")
+            enabled.text = "false"
+            self.task_xml = ET.tostring(root, encoding="unicode")
+            return subprocess.CompletedProcess(argv, 0, "", "")
         if "/end" in lowered:
             self.running = False
             return subprocess.CompletedProcess(argv, 0, "", "")
@@ -119,6 +129,13 @@ class UiServiceWindowsTests(unittest.TestCase):
     <LogonTrigger>
       <UserId>{escape(trigger_user)}</UserId>
     </LogonTrigger>
+    <TimeTrigger>
+      <Repetition>
+        <Interval>PT1M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>{service.RECOVERY_START_BOUNDARY}</StartBoundary>
+    </TimeTrigger>
   </Triggers>
   <Actions Context="OrchestraKitUser">
     <Exec>
@@ -145,6 +162,10 @@ class UiServiceWindowsTests(unittest.TestCase):
         ns = {"t": service.TASK_NAMESPACE}
         self.assertEqual(root.findtext("t:Triggers/t:LogonTrigger/t:UserId", namespaces=ns),
                          "S-1-5-21-123-456-789-1001")
+        self.assertEqual(root.findtext("t:Triggers/t:TimeTrigger/t:StartBoundary", namespaces=ns),
+                         service.RECOVERY_START_BOUNDARY)
+        self.assertEqual(root.findtext(
+            "t:Triggers/t:TimeTrigger/t:Repetition/t:Interval", namespaces=ns), "PT1M")
         self.assertEqual(root.findtext("t:Principals/t:Principal/t:LogonType", namespaces=ns),
                          "InteractiveToken")
         self.assertEqual(root.findtext("t:Principals/t:Principal/t:RunLevel", namespaces=ns),
@@ -194,6 +215,8 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertFalse(Path(first["task_xml"]).exists())
         self.assertFalse(Path(first["runner"]).exists())
         operations = [part.lower() for call in self.calls for part in call]
+        self.assertLess(operations.index("/change"), operations.index("/end"))
+        self.assertLess(operations.index("/end"), operations.index("/delete"))
         self.assertIn("/end", operations)
         self.assertIn("/delete", operations)
 
@@ -213,6 +236,15 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertIsNotNone(self.task_xml)
         self.assertTrue(Path(first["task_xml"]).exists())
         self.assertTrue(Path(first["runner"]).exists())
+        root = ET.fromstring(self.task_xml)
+        self.assertEqual(root.findtext(
+            "t:Settings/t:Enabled", namespaces={"t": service.TASK_NAMESPACE}), "false")
+
+        # A retry recognizes only the precisely-owned disabled state and can
+        # finish cleanup without re-enabling its periodic trigger.
+        result = service.uninstall_service(home=self.home)
+        self.assertFalse(result["installed"])
+        self.assertIsNone(self.task_xml)
 
     def test_existing_foreign_task_or_port_is_never_taken_over(self):
         self.task_xml = "<Task>foreign</Task>"
@@ -251,8 +283,7 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.install()
         self.task_xml = self.task_xml.replace(
             "<Triggers>",
-            "<Triggers><TimeTrigger><StartBoundary>2026-01-01T00:00:00</StartBoundary>"
-            "<Enabled>true</Enabled></TimeTrigger>",
+            "<Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger>",
         )
         self.calls.clear()
 
@@ -380,6 +411,27 @@ class UiServiceWindowsTests(unittest.TestCase):
                                 "<NetworkProfileName>foreign</NetworkProfileName></Settings>"),
         }
         for name, (before, after) in additions.items():
+            with self.subTest(name=name):
+                self.task_xml = original.replace(before, after, 1)
+                self.calls.clear()
+                with self.assertRaisesRegex(ValueError, "registered task.*modified"):
+                    service.uninstall_service(home=self.home)
+                self.assertFalse(any(part.lower() in ("/end", "/delete")
+                                     for call in self.calls for part in call))
+        self.task_xml = original
+
+    def test_periodic_recovery_trigger_is_strictly_owned(self):
+        self.install()
+        original = self.task_xml
+        mutations = {
+            "interval": ("<Interval>PT1M</Interval>", "<Interval>PT2M</Interval>"),
+            "boundary": (service.RECOVERY_START_BOUNDARY, "2001-01-01T00:00:00"),
+            "duration": ("</Repetition>", "<Duration>PT2M</Duration></Repetition>"),
+            "stop": ("</Repetition>",
+                     "<StopAtDurationEnd>true</StopAtDurationEnd></Repetition>"),
+            "disabled": ("</TimeTrigger>", "<Enabled>false</Enabled></TimeTrigger>"),
+        }
+        for name, (before, after) in mutations.items():
             with self.subTest(name=name):
                 self.task_xml = original.replace(before, after, 1)
                 self.calls.clear()
