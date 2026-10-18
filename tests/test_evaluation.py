@@ -62,6 +62,42 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report['accepted_trials'],1)
         self.assertEqual(report['unresolved_trials'],0)
 
+    def test_reverted_review_repair_remains_counted_with_current_quality_evidence(self):
+        self.prepare(repair_cycles=1);calls=[]
+        def runner(workspace,kit,job,**kwargs):
+            from orchestra_kit.check_execution import run_checks
+            from orchestra_kit.evidence import create_evidence
+            from orchestra_kit.retry import failure_state
+            r=self.fake_runner(workspace,kit,job,**kwargs);calls.append(job['role']);n=len(calls)
+            if n==3:(workspace/'calc.py').write_text(CASE['files']['calc.py'])
+            directory=workspace/'.orchestra/checks'/f'actual-{n}';directory.mkdir()
+            failure,checks=run_checks(workspace,job['checks'],10,directory,1)
+            r['attempts'][0]['checks']=checks
+            if failure:
+                r.update(status='failed',failure=failure,evidence_ref=None)
+                r['attempts'][0]['retry_state']=failure_state(workspace,job['evidence_files'],checks)
+            else:
+                review=job['role']=='reviewer';verdict='FAIL' if n==2 else 'PASS'
+                report=directory/'review.txt';report.write_text('VERDICT: '+verdict+'\nChange addition to subtraction.')
+                r.update(final=report.read_text() if review else 'Implemented.',status='failed' if n==2 else 'verified')
+                if n==2:r['failure']='review verdict: FAIL'
+                r['evidence_ref']=create_evidence(workspace,job['evidence_files'],checks,
+                    review_verdict=verdict if review else None,review_report=report if review else None)
+            return r
+        report=evaluation.run_suite(self.root,KIT,max_calls=4,runner=runner)
+        self.assertEqual(calls,['worker','reviewer','worker','reviewer'])
+        self.assertEqual(report['quality_pass_count'],1)
+        self.assertEqual(report['model_attempts'],4)
+        self.assertEqual(report['observed_total_tokens'],48)
+        result=json.loads((self.root/'addition-1/result.json').read_text())
+        self.assertEqual(result['receipts'][2]['receipt']['status'],'failed')
+        self.assertEqual((self.root/'addition-1/workspace/calc.py').read_text(),CASE['solution']['calc.py'])
+        # Fresh grading alone cannot replace a now-stale source-bound review.
+        source=self.root/'addition-1/workspace/calc.py';source.write_text(source.read_text()+'\n')
+        result['subjects']=evaluation._subjects(CASE,source.parent)
+        (self.root/'addition-1/result.json').write_text(json.dumps(result))
+        self.assertEqual(evaluation.report_suite(self.root)['quality_pass_count'],0)
+
     def test_prepared_sources_are_repeatable_and_grader_stays_outside_workspace(self):
         self.prepare(); trial=self.root/'addition-1'
         self.assertFalse((trial/'workspace/grader.py').exists())

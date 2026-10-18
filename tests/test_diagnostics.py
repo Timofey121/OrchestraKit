@@ -46,6 +46,38 @@ class DiagnosticsTests(unittest.TestCase):
         packet=build_repair_packet(self.project,[{'argv':['python3','task.py'],'returncode':1,'failure_cause':'implementation','log':ref}])
         self.assertIn('KeyError: important',packet)
 
+    def test_repair_packet_keeps_unittest_identity_trace_assertion_and_actual_value(self):
+        from orchestra_kit.diagnostics import build_repair_packet
+
+        ref = self.log(
+            'Ran 7 tests in 0.001s\n'
+            '\n'
+            'FAILED (failures=1)\n'
+            'FAIL: test_zero_ttl_does_not_evict_a_live_value '
+            '(grader.SubmittedRegressionTests.test_zero_ttl_does_not_evict_a_live_value)\n'
+            '----------------------------------------------------------------------\n'
+            'Traceback (most recent call last):\n'
+            '  File "grader.py", line 49, in test_zero_ttl_does_not_evict_a_live_value\n'
+            '    self.assertEqual(cache.get("live"), "keep")\n'
+            'AssertionError: None != \'keep\'\n'
+            '\n'
+            '----------------------------------------------------------------------\n'
+            'Ran 7 tests in 0.001s\n'
+            '\n'
+            'FAILED (failures=1)\n',
+            'unittest-failure.log',
+        )
+        packet = json.loads(build_repair_packet(self.project, [{
+            'argv': ['python3', '-m', 'unittest'],
+            'returncode': 1,
+            'failure_cause': 'implementation',
+            'log': ref,
+        }]))
+        diagnostics = '\n'.join(item['text'] for item in packet['failures'][0]['diagnostics'])
+        self.assertIn('test_zero_ttl_does_not_evict_a_live_value', diagnostics)
+        self.assertIn('self.assertEqual(cache.get("live"), "keep")', diagnostics)
+        self.assertIn("AssertionError: None != 'keep'", diagnostics)
+
     def test_query_rejects_unsafe_or_unretained_paths(self):
         from orchestra_kit.diagnostics import query_log
 

@@ -299,7 +299,10 @@ def report_suite(root: Path) -> dict:
         if not phases:complete=False
         latest_grade=grade_trial(trial)
         workers=[p['receipt'] for p in phases if p['role']=='worker']
-        worker=next(iter(reversed(workers)),{})
+        # A failed repair stays charged, while a restored passing source may
+        # be certified by its earlier worker plus a fresh independent review.
+        worker=next((w for w in reversed(workers) if w.get('status')=='verified'),
+                    next(iter(reversed(workers)),{}))
         reviewer=next((p['receipt'] for p in reversed(phases) if p['role']=='reviewer'),{})
         initial_worker=next(iter((workers[0] if workers else {}).get('attempts',[])),{})
         passed=(not result.get('exception') and result.get('subjects')==_subjects(case,workspace)
@@ -307,6 +310,18 @@ def report_suite(root: Path) -> dict:
                 and result.get('workflow_status','verified')=='verified'
                 and worker.get('status')=='verified' and reviewer.get('status')=='verified'
                 and str(reviewer.get('final','')).splitlines()[:1]==['VERDICT: PASS'])
+        if passed:
+            from .evidence import verify_evidence
+            try:
+                required=sorted(set(case['files'])|set(case['write_paths']))
+                for receipt,kind in ((worker,'check'),(reviewer,'review')):
+                    cert=verify_evidence(workspace,receipt.get('evidence_ref'),kind=kind,required_files=required)
+                    if [{'argv':c.get('argv'),'failure_cause':c.get('failure_cause')} for c in cert['checks']] != _checks(trial):
+                        raise ValueError('evaluation evidence proves different checks')
+                    if kind=='review' and (workspace/cert['review_report']['path']).read_text()!=reviewer.get('final'):
+                        raise ValueError('evaluation review report changed')
+            except (OSError,ValueError,KeyError,TypeError):
+                passed=False
         trials.append({'case':manifest['case'],'repeat':manifest['repeat'],'completed':True,
                        'passed':passed,'usage_complete':complete,'phases':phase_info,
                        'initial_profile':initial_worker.get('profile'),'exception':result.get('exception'),

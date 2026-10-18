@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 
@@ -30,6 +31,28 @@ class CliTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
+
+    def test_ui_all_projects_does_not_add_working_directory_or_open_browser(self):
+        from orchestra_kit.cli import main
+        server = Mock(server_address=('127.0.0.1', 8731))
+        server.serve_forever.side_effect = KeyboardInterrupt
+        with patch('orchestra_kit.dashboard.Dashboard') as dashboard, \
+                patch('orchestra_kit.dashboard.make_server', return_value=server), \
+                patch('webbrowser.open') as browser:
+            self.assertEqual(main(['ui', '--all-projects', '--no-browser']), 0)
+        self.assertEqual(dashboard.call_args.args[0], [])
+        browser.assert_not_called()
+        server.server_close.assert_called_once()
+
+    def test_ui_autostart_routes_without_starting_foreground_server(self):
+        from orchestra_kit.cli import main
+        with patch('orchestra_kit.ui_service.install_service', return_value={'installed': True}) as install, \
+                patch('orchestra_kit.dashboard.make_server') as server:
+            self.assertEqual(main(['ui-autostart', 'install', '--skills-dir', str(self.project),
+                                   '--codex-home', str(self.project / 'codex'), '--port', '8732']), 0)
+        self.assertEqual(install.call_args.args, (self.project / 'orchestra', self.project / 'codex'))
+        self.assertEqual(install.call_args.kwargs['port'], 8732)
+        server.assert_not_called()
 
     def test_init_sync_and_doctor_work_end_to_end(self) -> None:
         initialized = self.run_cli("init", str(self.project), "--name", "Demo")

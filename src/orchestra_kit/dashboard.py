@@ -1024,6 +1024,10 @@ def make_server(dashboard: Dashboard, host: str = "127.0.0.1", port: int = 0, st
                 self._reply(HTTPStatus.FORBIDDEN, b"invalid Origin")
                 return
             path = unquote(urlsplit(self.path).path)
+            if path == '/api/health':
+                self._reply(HTTPStatus.OK, json.dumps({'service': 'orchestra-ui', 'pid': os.getpid()}).encode(),
+                            'application/json; charset=utf-8')
+                return
             if path=='/api/session':
                 self._reply(HTTPStatus.OK,json.dumps({'token':session_token}).encode(),'application/json; charset=utf-8');return
             if path == "/api/overview":

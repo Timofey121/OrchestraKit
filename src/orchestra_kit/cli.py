@@ -41,12 +41,19 @@ def _parser() -> argparse.ArgumentParser:
     doctor.add_argument("project", nargs="?", default=".", help="Project directory (default: current directory)")
 
     ui = commands.add_parser('ui', help='Open the live local project and chat dashboard')
-    ui.add_argument('projects', nargs='*', default=['.'])
+    ui.add_argument('projects', nargs='*', default=[])
     ui.add_argument('--host', default='127.0.0.1', help='Loopback interface only')
     ui.add_argument('--port', type=int, default=8731)
     ui.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
     ui.add_argument('--no-codex', action='store_true', help='Read only explicit Orchestra projects')
     ui.add_argument('--no-browser', action='store_true')
+    ui.add_argument('--all-projects', action='store_true', help='Use Codex project discovery without adding the working directory')
+
+    autostart = commands.add_parser('ui-autostart', help='Manage the macOS user dashboard service')
+    autostart.add_argument('action', choices=('install', 'status', 'uninstall'))
+    autostart.add_argument('--skills-dir', default=str(Path.home() / '.agents/skills'))
+    autostart.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
+    autostart.add_argument('--port', type=int, default=8731)
 
     route = commands.add_parser("route", help="Recommend a configured model, effort, and execution policy")
     route.add_argument("project", nargs="?", default=".")
@@ -62,6 +69,11 @@ def _parser() -> argparse.ArgumentParser:
     brief = commands.add_parser("brief", help="Validate and render a bounded leaf brief")
     brief.add_argument("project", nargs="?", default=".")
     brief.add_argument("--input", required=True, help="JSON file with the six brief sections")
+    recipe = commands.add_parser('recipe', help='Compile a bugfix, feature or refactor task locally; never launches a model')
+    recipe.add_argument('project', nargs='?', default='.')
+    recipe_mode = recipe.add_mutually_exclusive_group(required=True)
+    recipe_mode.add_argument('--input', help='JSON task with recipe, goal, files, scope, acceptance and checks')
+    recipe_mode.add_argument('--describe', choices=('bugfix', 'feature', 'refactor'), help='Show only this recipe; no project setup needed')
     task = commands.add_parser("task", help="Store durable progress and verification evidence")
     task_commands = task.add_subparsers(dest="task_command", required=True)
     for name in ("start", "record", "show", "list"):
@@ -223,6 +235,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     kit = _kit_root()
     try:
+        if args.command == 'ui-autostart':
+            from .ui_service import install_service, service_status, uninstall_service
+            if args.action == 'install':
+                result = install_service(Path(args.skills_dir) / 'orchestra', Path(args.codex_home), port=args.port)
+            elif args.action == 'uninstall':
+                result = uninstall_service()
+            else:
+                result = service_status()
+            _print_json(result)
+            return 0
+        if args.command == 'recipe':
+            from .recipes import compile_recipe, recipe_instructions
+            if args.describe:
+                _print_json({'recipe': args.describe, **{role: recipe_instructions(args.describe, role) for role in ('worker', 'reviewer')}})
+            else:
+                _print_json(compile_recipe(Path(args.project).expanduser().resolve(), kit, _json_input(args.input)))
+            return 0
         if args.command == 'setup':
             skills_dir = Path(args.skills_dir).expanduser()
             codex_home = Path(args.codex_home).expanduser()
@@ -250,7 +279,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == 'ui':
             from .dashboard import Dashboard, make_server
             import webbrowser
-            dashboard = Dashboard([Path(p).expanduser() for p in (args.projects or ['.'])],
+            if args.all_projects and (args.no_codex or args.projects):
+                raise ValueError('--all-projects cannot be combined with explicit projects or --no-codex')
+            dashboard = Dashboard([] if args.all_projects else [Path(p).expanduser() for p in (args.projects or ['.'])],
                                   None if args.no_codex else Path(args.codex_home).expanduser(), kit)
             server = make_server(dashboard, host=args.host, port=args.port,
                                  static_root=Path(__file__).with_name('web'))

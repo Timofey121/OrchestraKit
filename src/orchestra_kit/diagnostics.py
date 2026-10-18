@@ -20,6 +20,10 @@ _MAX_QUERY_LINES = 200
 _MAX_CONTEXT_LINES = 20
 _MAX_QUERY_CHARS = 6_000
 _EXCEPTION_LINE = re.compile(r"\b[A-Za-z_]\w*(?:Error|Exception):")
+_UNITTEST_FAILURE_LINE = re.compile(r"^(?:FAIL|ERROR):\s+", re.IGNORECASE)
+_ASSERTION_SOURCE_LINE = re.compile(r"\b(?:self\.)?assert\w*\s*(?:\(|$)")
+_MAX_REPAIR_DIAGNOSTICS = 8
+_REPAIR_CONTEXT_LINES = 3
 
 
 def _redaction_values() -> tuple[str, ...]:
@@ -331,10 +335,25 @@ def _check_log_reference(project: Path, value: Any) -> tuple[Path, str]:
 
 
 def _repair_details(path: Path, values: Sequence[str], root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-    selected: list[tuple[int, dict[str, Any]]] = []
+    selected: dict[int, tuple[int, dict[str, Any]]] = {}
     tail: deque[dict[str, Any]] = deque(maxlen=4)
+    preceding: deque[dict[str, Any]] = deque(maxlen=_REPAIR_CONTEXT_LINES)
+    following = 0
     incomplete = False
     read_state = _ReadState()
+
+    def retain(score: int, item: dict[str, Any]) -> None:
+        """Keep the most useful small set of anchors and their local context."""
+        existing = selected.get(item["line"])
+        if existing is None or score > existing[0]:
+            selected[item["line"]] = (score, item)
+        if len(selected) > _MAX_REPAIR_DIAGNOSTICS:
+            retained = sorted(selected.values(), key=lambda entry: (-entry[0], entry[1]["line"]))[
+                :_MAX_REPAIR_DIAGNOSTICS
+            ]
+            selected.clear()
+            selected.update({entry[1]["line"]: entry for entry in retained})
+
     for number, text, line_truncated in _iter_redacted_lines(
             path, values, max_chars=700, root=root, state=read_state):
         item = {"line": number, "text": text}
@@ -343,13 +362,23 @@ def _repair_details(path: Path, values: Sequence[str], root: Path) -> tuple[list
         if line_truncated or _TRUNCATION_TEXT in text:
             incomplete = True
         lower=text.lower()
-        score=4 if _EXCEPTION_LINE.search(text) else 3 if 'traceback' in lower else 2 if lower.startswith(('error','critical','fatal')) else 1 if any(word in lower for word in _DIAGNOSTIC_WORDS) and 'error_count=0' not in lower else 0
+        score=(5 if _EXCEPTION_LINE.search(text)
+               else 4 if _UNITTEST_FAILURE_LINE.search(text)
+               else 3 if 'traceback' in lower or _ASSERTION_SOURCE_LINE.search(text)
+               else 2 if lower.startswith(('error','critical','fatal'))
+               else 1 if any(word in lower for word in _DIAGNOSTIC_WORDS) and 'error_count=0' not in lower
+               else 0)
         if score:
-            selected.append((score,item))
-            selected.sort(key=lambda entry:(-entry[0],entry[1]['line']))
-            del selected[8:]
+            retain(score, item)
+            for earlier in preceding:
+                retain(1, earlier)
+            following = _REPAIR_CONTEXT_LINES
+        elif following:
+            retain(1, item)
+        following = max(0, following - 1)
+        preceding.append(item)
         tail.append(item)
-    diagnostics=sorted((entry[1] for entry in selected),key=lambda item:item['line'])
+    diagnostics=sorted((entry[1] for entry in selected.values()),key=lambda item:item['line'])
     return diagnostics, list(tail), incomplete or read_state.incomplete
 
 

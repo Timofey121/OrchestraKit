@@ -25,8 +25,9 @@ from .check_execution import (
 )
 from .log_capture import sanitized_output, sensitive_values, redacted_text
 from .fingerprint import check_fingerprint, fingerprint_paths
-from .routing import BRIEF_SECTIONS, build_brief, route_task
+from .routing import BRIEF_SECTIONS, route_task
 from .retry import failure_state, repeated_failure
+from .recipes import recipe_instructions, render_recipe_brief
 
 try:  # Windows has no advisory file-lock primitive compatible with flock.
     import fcntl
@@ -34,7 +35,7 @@ except ImportError:  # pragma: no cover - exercised on Windows hosts.
     fcntl = None
 
 
-_JOB_KEYS = frozenset({"role", "complexity", "risk", "size", "independent", "brief", "checks", "review_files", "required_capabilities", "evidence_files", "task_id", "result_contract"})
+_JOB_KEYS = frozenset({"role", "complexity", "risk", "size", "independent", "brief", "checks", "review_files", "required_capabilities", "evidence_files", "task_id", "result_contract", "recipe"})
 _MAX_LOG_BYTES = 1_000_000
 
 
@@ -47,6 +48,8 @@ def _validate_job(job: Any, *, advisory_only: bool = False) -> dict[str, Any]:
     for key in ('role', 'complexity', 'risk', 'size'):
         if not isinstance(job[key], str) or not job[key]:
             raise ValueError(f'{key} must be a nonempty string')
+    if 'recipe' in job:
+        recipe_instructions(job['recipe'], job['role'])
     if not isinstance(job["brief"], dict) or set(job["brief"]) != set(BRIEF_SECTIONS):
         raise ValueError("brief must contain exactly the six required sections")
     if advisory_only:
@@ -347,7 +350,7 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
     if codex_command is not None and (isinstance(codex_command, (str, bytes)) or not isinstance(codex_command, Sequence)
                                       or not codex_command or not all(isinstance(part, str) and part and '\0' not in part for part in codex_command)):
         raise ValueError("codex_command must be a nonempty command sequence")
-    brief = build_brief(config, data["brief"])
+    brief = render_recipe_brief(config, data)
     route = route_task(config, role=data["role"], complexity=data["complexity"], risk=data["risk"],
                        size=data["size"], independent=data["independent"],
                        required_capabilities=data["required_capabilities"], **(recovery or {}))

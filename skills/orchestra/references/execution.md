@@ -44,6 +44,42 @@ names. Optional `review_files` lists the exact files covered by a read-only
 review; the runner rejects any change to them during execution or checks.
 Do not use that field for files an implementation leaf is supposed to edit.
 
+## Ready task recipes
+
+Choose `bugfix`, `feature`, or `refactor` from the user's requested outcome.
+`recipe --describe KIND` returns only that recipe's worker and reviewer steps;
+it needs no configured project and makes no model call. Use these steps in the
+root for small work. Mixed or unclear tasks use the general workflow.
+
+For a configured native job, `recipe PROJECT --input TASK.json` compiles this
+compact task to the usual job JSON:
+
+```json
+{
+  "recipe": "bugfix",
+  "goal": "Fix quoted comma parsing while preserving valid zero amounts.",
+  "files": ["src/loader.py", "tests/test_loader.py"],
+  "scope": "Edit only these files; preserve the public API. No commits.",
+  "acceptance": ["Quoted commas parse correctly", "Valid zero amounts remain accepted"],
+  "checks": [{"argv": ["python3", "-m", "unittest", "tests.test_loader", "-v"], "failure_cause": "implementation"}]
+}
+```
+
+Keep only relevant facts in optional `context`. The compiler retains criteria,
+scope and check commands, and never executes them. Include tests and relevant
+inputs in `files`, including explicitly named files to create. Defaults keep
+work in root (`size: small`, `independent: false`); assess complexity and risk
+from evidence rather than treating the default `standard`/`medium` as a finding.
+For a substantial independent leaf, explicitly set `size: substantial` and
+`independent: true`, then pass the compiled JSON to `workflow` or `execute`.
+Optional `task_id` and `required_capabilities` follow the ordinary job contract.
+
+An ordinary six-section job can instead add `"recipe": "refactor"`. The native
+runner adds only the selected role's steps, once per prompt and within the brief
+budget. Repairs and fresh reviews retain the recipe and original requirements.
+Model routing, required checks, evidence, repair limits and review gates remain
+project-owned. Recipes do not establish real token savings or model quality.
+
 ## Full worker and review cycle
 
 For an independent worker task that needs checks and bounded post-review fixes,

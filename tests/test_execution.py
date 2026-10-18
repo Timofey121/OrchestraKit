@@ -261,6 +261,32 @@ class ExecutionTests(unittest.TestCase):
         self.assertNotIn('tokens', measured)
         self.assertEqual(json.loads(Path(receipt['manifests'][0]).read_text())['attempts'][0]['submitted_context'], measured)
 
+    def test_recipe_reaches_native_worker_and_reviewer_once_with_actual_payload_counts(self):
+        trace = Path(self.temp.name) / 'recipe-prompt.json'
+        self.cli.write_text(self.cli.read_text().replace('path.write_text(str(count + 1))',
+            "path.write_text(str(count + 1));\n" +
+            f"pathlib.Path({str(trace)!r}).write_text(json.dumps({{'prompt':sys.stdin.read(),'args':sys.argv}}))"))
+        for kind in ('bugfix', 'feature', 'refactor'):
+            for role in ('worker', 'reviewer'):
+                with self.subTest(kind=kind, role=role):
+                    os.environ['FAKE_MODE'] = 'review-pass' if role == 'reviewer' else 'ok'
+                    try:
+                        result = self.execute(self.job(recipe=kind, role=role))
+                    except ValueError as exc:
+                        self.fail(f'valid recipe was rejected: {exc}')
+                    from orchestra_kit.recipes import recipe_instructions
+                    sent = json.loads(trace.read_text())
+                    self.assertEqual(result['status'], 'verified')
+                    self.assertEqual(sent['prompt'].count(recipe_instructions(kind, role)), 1)
+                    self.assertEqual(result['attempts'][0]['submitted_context']['prompt_chars'], len(sent['prompt']))
+                    self.assertEqual(len(result['attempts']), 1)
+
+    def test_invalid_recipe_never_dispatches(self):
+        for kind in ('auto', None, [], True):
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                self.execute(self.job(recipe=kind))
+        self.assertFalse(self.state.exists())
+
     def test_diagnostic_mode_reaches_native_retry_without_losing_original_goal(self):
         config=self.project/'.orchestra/project.toml'
         config.write_text(config.read_text().replace('[context]','[context]\nrepair_context = "diagnostic"'))

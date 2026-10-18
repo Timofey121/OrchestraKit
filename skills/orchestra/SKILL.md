@@ -40,6 +40,14 @@ The launcher is `python3 <this-skill-directory>/scripts/orchestra.py`; it bundle
 its own library and templates and requires Python 3.11+. Resolve the directory
 from the loaded skill location, not the original kit checkout.
 
+Choose `bugfix`, `feature`, or `refactor` from the user's intent. Get only its
+steps with `recipe --describe KIND` using that launcher; reuse steps already
+loaded in this session. Apply them locally for small work without initialization
+or delegation. Mixed or unclear tasks keep the general workflow. For native
+jobs, `recipe PROJECT --input TASK.json` compiles the bounded job locally;
+see [execution](references/execution.md) for its fields. Recipes preserve project
+routing, required checks, review gates and budgets.
+
 ## Delegate only when useful
 
 For model/effort decisions, provider capabilities, fresh leaves, context limits,
