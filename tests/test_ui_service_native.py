@@ -17,13 +17,31 @@ from orchestra_kit.install import install_user_setup
 from orchestra_kit import ui_service
 
 
-def _print_command_diagnostic(label, argv, *, timeout):
+class NativeUiDiagnosticTests(unittest.TestCase):
+    def test_sample_output_keeps_call_graph_and_drops_binary_images(self):
+        sample = ('Sampling process\nCall graph:\n  blocked frame\n'
+                  'Binary Images:\n  thousands of irrelevant images')
+        self.assertEqual(
+            _bounded_result(sample, before='Binary Images:'),
+            'Sampling process\nCall graph:\n  blocked frame',
+        )
+
+
+def _bounded_result(output, *, before=None, limit=12000):
+    output = output.strip()
+    if before is not None:
+        output = output.split(before, 1)[0].rstrip()
+        return output[:limit]
+    return output[-limit:]
+
+
+def _print_command_diagnostic(label, argv, *, timeout, before=None):
     """Print bounded process evidence without hiding the original test failure."""
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-        output = (result.stdout + '\n' + result.stderr).strip()
+        output = _bounded_result(result.stdout + '\n' + result.stderr, before=before)
         print(f'{label}: exit={result.returncode}', flush=True)
-        print(output[-12000:] if output else '<no output>', flush=True)
+        print(output if output else '<no output>', flush=True)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f'{label}: unavailable: {exc}', flush=True)
 
@@ -59,10 +77,23 @@ def _diagnose_macos_startup(started_at, launcher, codex, failed_port):
         if launchd_healthy:
             return
         _print_command_diagnostic(
-            'macOS launchd process sample', ['/usr/bin/sample', pid, '3', '1'], timeout=8
+            'macOS launchd process sample', ['/usr/bin/sample', pid, '3', '1'], timeout=8,
+            before='Binary Images:',
         )
     else:
         print('macOS launchd process: no PID reported', flush=True)
+
+    dns_started = time.monotonic()
+    try:
+        fqdn = socket.getfqdn('127.0.0.1')
+        dns_result = repr(fqdn)
+    except OSError as exc:
+        dns_result = f'error={exc}'
+    dns_elapsed = time.monotonic() - dns_started
+    post_dns_status = ui_service.service_status()
+    print(f'macOS getfqdn(127.0.0.1) result={dns_result} elapsed={dns_elapsed:.1f}s; '
+          f'launchd healthy={post_dns_status["healthy"]} '
+          f'total_elapsed={time.monotonic() - started_at:.1f}s', flush=True)
 
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
@@ -70,6 +101,7 @@ def _diagnose_macos_startup(started_at, launcher, codex, failed_port):
     command = [sys.executable, str(launcher), 'ui', '--all-projects', '--no-browser',
                '--host', '127.0.0.1', '--port', str(direct_port),
                '--codex-home', str(codex)]
+    direct_started = time.monotonic()
     direct = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     direct_healthy = False
     try:
@@ -87,9 +119,13 @@ def _diagnose_macos_startup(started_at, launcher, codex, failed_port):
         except subprocess.TimeoutExpired:
             direct.kill()
             output = direct.communicate(timeout=5)[0]
+    direct_elapsed = time.monotonic() - direct_started
     print(f'macOS direct launcher healthy={direct_healthy} exit={direct.returncode} '
-          f'launchd_port={failed_port} direct_port={direct_port}', flush=True)
-    print(output[-12000:] if output else '<no output>', flush=True)
+          f'elapsed={direct_elapsed:.1f}s launchd_port={failed_port} direct_port={direct_port}', flush=True)
+    print(_bounded_result(output) if output else '<no output>', flush=True)
+    comparison_status = ui_service.service_status()
+    print(f'macOS launchd after direct comparison: {comparison_status}; '
+          f'total_elapsed={time.monotonic() - started_at:.1f}s', flush=True)
 
 
 @unittest.skipUnless(os.environ.get('ORCHESTRA_NATIVE_UI_TEST') == '1',
