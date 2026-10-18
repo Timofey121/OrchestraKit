@@ -101,7 +101,7 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertIn(repr(str(self.skill / "scripts/orchestra.py")), runner)
         for argument in ("--all-projects", "--no-browser", "--host", "127.0.0.1",
                          "--port", "9876", "--codex-home", str(self.codex)):
-            self.assertIn(argument, runner)
+            self.assertIn(repr(argument), runner)
         operations = [next(part for part in call if part.startswith("/")) for call in self.calls]
         self.assertIn("/create", operations)
         self.assertIn("/run", operations)
@@ -168,8 +168,8 @@ class UiServiceWindowsTests(unittest.TestCase):
     def test_local_or_registered_tampering_blocks_status_install_and_uninstall(self):
         first = self.install()
         runner = Path(first["runner"])
-        original_runner = runner.read_text(encoding="utf-8")
-        runner.write_text(original_runner + "# personal edit\n", encoding="utf-8")
+        original_runner = runner.read_bytes()
+        runner.write_bytes(original_runner + b"# personal edit\n")
         self.calls.clear()
         with self.assertRaisesRegex(ValueError, "modified|ownership"):
             service.service_status(home=self.home)
@@ -178,7 +178,7 @@ class UiServiceWindowsTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
         # Restore a valid local installation, then change the scheduler copy.
-        runner.write_text(original_runner, encoding="utf-8")
+        runner.write_bytes(original_runner)
         self.task_xml = self.task_xml.replace("LeastPrivilege", "HighestAvailable")
         self.calls.clear()
         with self.assertRaisesRegex(ValueError, "registered task.*modified"):
