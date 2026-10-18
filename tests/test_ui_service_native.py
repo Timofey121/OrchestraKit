@@ -71,6 +71,20 @@ class NativeUiServiceTests(unittest.TestCase):
                 else:
                     self.fail(f'service did not recover: {recovered}')
                 print(f'Native {sys.platform} UI recovery: {first["pid"]} -> {recovered["pid"]}', flush=True)
+            except Exception:
+                # These are disposable test services with synthetic data only.
+                if sys.platform == 'darwin':
+                    log = ui_service._paths(Path.home())[2]
+                    print(ui_service._launchctl('print', ui_service._target(), required=False).stdout, flush=True)
+                elif sys.platform == 'linux':
+                    from orchestra_kit.ui_service_linux import _paths
+                    log = _paths(Path.home())[2]
+                else:
+                    from orchestra_kit.ui_service_windows import _paths
+                    log = _paths().log
+                if log.exists():
+                    print(log.read_text(encoding='utf-8', errors='replace')[-8000:], flush=True)
+                raise
             finally:
                 ui_service.uninstall_service()
             self.assertFalse(ui_service.service_status()['installed'])
