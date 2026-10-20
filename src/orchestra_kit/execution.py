@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - exercised on Windows hosts.
     fcntl = None
 
 
-_JOB_KEYS = frozenset({"role", "complexity", "risk", "size", "independent", "brief", "checks", "review_files", "required_capabilities", "evidence_files", "task_id", "result_contract", "recipe"})
+_JOB_KEYS = frozenset({"role", "complexity", "risk", "size", "independent", "brief", "checks", "review_files", "required_capabilities", "evidence_files", "task_id", "result_contract", "recipe", "reproduction_checks"})
 _MAX_LOG_BYTES = 1_000_000
 
 
@@ -50,6 +50,10 @@ def _validate_job(job: Any, *, advisory_only: bool = False) -> dict[str, Any]:
             raise ValueError(f'{key} must be a nonempty string')
     if 'recipe' in job:
         recipe_instructions(job['recipe'], job['role'])
+    if 'reproduction_checks' in job:
+        if job.get('recipe') != 'bugfix' or job['role'] != 'worker':
+            raise ValueError('reproduction_checks require a bugfix worker')
+        job = {**job, 'reproduction_checks':validate_checks(job['reproduction_checks'])}
     if not isinstance(job["brief"], dict) or set(job["brief"]) != set(BRIEF_SECTIONS):
         raise ValueError("brief must contain exactly the six required sections")
     if advisory_only:
@@ -58,6 +62,8 @@ def _validate_job(job: Any, *, advisory_only: bool = False) -> dict[str, Any]:
         checks = []
     else:
         checks = validate_checks(job["checks"])
+        if 'reproduction_checks' in job:
+            checks = validate_checks(checks + [c for c in job['reproduction_checks'] if c not in checks])
     review_files = job.get("review_files", [])
     if not isinstance(review_files, list) or not all(isinstance(name, str) for name in review_files):
         raise ValueError("review_files must be a list of paths")

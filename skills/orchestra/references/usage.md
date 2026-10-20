@@ -40,7 +40,7 @@ savings recommendation. See [reliability](reliability.md) for the command.
 
 ## Repeatable coding tasks
 
-`eval list` describes six bundled synthetic Python tasks. `eval prepare --output
+`eval list` describes eight bundled synthetic Python tasks. `eval prepare --output
 NEW_DIRECTORY --variant baseline --repeat 2` creates isolated task projects and
 external acceptance graders. Preparation, `eval grade`, `eval report` and
 `eval compare BEFORE_DIRECTORY AFTER_DIRECTORY` do not invoke models.

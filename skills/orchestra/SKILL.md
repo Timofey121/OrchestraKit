@@ -48,6 +48,13 @@ jobs, `recipe PROJECT --input TASK.json` compiles the bounded job locally;
 see [execution](references/execution.md) for its fields. Recipes preserve project
 routing, required checks, review gates and budgets.
 
+Bug investigations may finish unchanged after targeted reproduction, required
+checks and independent review. Missing evidence never proves a bug absent;
+this outcome cannot waive feature or refactor criteria.
+For native bugfix workflows with explicit reproduction assertions, see
+`reproduction_checks` in [execution](references/execution.md); no writer is needed
+before review when those assertions and all required checks already pass.
+
 ## Delegate only when useful
 
 For model/effort decisions, provider capabilities, fresh leaves, context limits,

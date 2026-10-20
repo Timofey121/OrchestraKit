@@ -69,6 +69,7 @@ def _failure(receipt: dict) -> str | None:
 def _review_job(worker: dict, files: list[str]) -> dict:
     job = copy.deepcopy(worker)
     job.pop('result_contract', None)
+    job.pop('reproduction_checks', None)
     job.update(role='reviewer', review_files=files)
     brief = job['brief']
     original = copy.deepcopy(worker['brief'])
@@ -161,6 +162,11 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
     original = _validate_job(copy.deepcopy(job))
     if original['role'] != 'worker' or not original['evidence_files']:
         raise ValueError('workflow requires a worker job and explicit evidence_files')
+    # Root-supplied reproduction assertions are additional required checks,
+    # never replacements for the original suite. They enable an opt-in path.
+    if 'reproduction_checks' in original:
+        original['brief']['CONTEXT'] = {'original_context':original['brief']['CONTEXT'],
+                                      'reproduction_checks':original['reproduction_checks']}
     if config.roles['reviewer'].sandbox != 'read-only':
         raise ValueError('workflow reviewer must be read-only')
     if reuse and (not isinstance(environment, dict) or not environment
@@ -230,6 +236,8 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
     failure_states = []
     protected_materials = []
     baseline = None
+    preflight = None
+    preflight_selected = False
     materials_directory = directory/path.stem/'review-materials'
     execute = runner or run_job
     cap = min(max_calls, config.workflow.max_launches or max_calls)
@@ -253,8 +261,11 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                   'stop_reason':reason, 'failure_cause':cause, 'next_action':action,
                   'receipts':phases, 'review_repair_recoveries':recoveries,
                   'review_repair_checkpoint':checkpoint,
-                  'repairs':sum(1 for p in phases[1:] if p['role']=='worker'
-                                and p['receipt'].get('attempts') and not p['receipt'].get('reused')),
+                  'preflight':preflight,
+                  'no_change':status == 'verified' and preflight_selected and repairs == 0,
+                  'repairs':sum(1 for p in (phases if preflight_selected else phases[1:])
+                                if p['role']=='worker' and p['receipt'].get('attempts')
+                                and not p['receipt'].get('reused')),
                   'repair_decisions':repairs, 'model_attempts':None if uncertain else used,
                   'known_model_attempts':used, 'max_calls':cap, 'usage':usage,
                   'elapsed_seconds':time.monotonic()-started, 'artifact':str(path),
@@ -278,6 +289,38 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
             initial_material_policies.update(baseline_policies['files'])
         except (OSError, ValueError, KeyError, TypeError):
             return finish('failed', 'review-materials-unavailable', 'context', 'gather-context')
+        if 'reproduction_checks' in original:
+            if acceptance is not None and not acceptance():
+                return finish('failed', 'host-acceptance', 'context', 'gather-context')
+            # Local checks may execute arbitrary project code. Detect changed
+            # declared inputs even on failure; never silently restore user files.
+            before = fingerprint_paths(project, files)
+            try:
+                preflight = run_evidence(project, files, original['checks'], timeout_seconds=timeout_seconds)
+            except (OSError, ValueError, KeyError, TypeError):
+                return finish('failed', 'preflight-unavailable', 'environment', 'root-reassessment')
+            if check_fingerprint(project, before):
+                return finish('failed', 'preflight-inputs-changed', 'context', 'gather-context')
+            if any(c.get('reason') or c.get('returncode') is None for c in preflight['checks']):
+                return finish('failed', 'preflight-environment', 'environment', 'root-reassessment')
+            failures = [c for c in preflight['checks'] if c.get('returncode') != 0]
+            if failures and failures[0]['failure_cause'] != 'implementation':
+                cause = failures[0]['failure_cause']
+                return finish('failed', 'preflight-'+cause, cause,
+                              'gather-context' if cause == 'context' else 'root-reassessment')
+            if preflight['status'] == 'verified':
+                preflight_selected = True
+                last_worker = {**preflight, 'attempts':[],
+                               'final':'Host local reproduction and required checks passed; no worker was launched. This is not proof that the report is invalid.'}
+            else:
+                try:
+                    from .diagnostics import build_repair_packet
+                    work = copy.deepcopy(original)
+                    work['brief']['CONTEXT']['preflight_failure'] = build_repair_packet(
+                        project, preflight['checks'], max_chars=2000, compact=True)
+                    render_recipe_brief(config, work)
+                except (OSError, ValueError, KeyError, TypeError):
+                    return finish('failed', 'preflight-context-budget', 'context', 'gather-context')
         while True:
             if any(check_fingerprint(project, s) for s in protected_materials):
                 return finish('failed', 'review-materials-changed', 'context', 'gather-context')
@@ -285,10 +328,13 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                 return finish('failed', 'policy-or-dependency-changed', 'context', 'gather-context')
             if acceptance is not None and not acceptance():
                 return finish('failed', 'host-acceptance', 'context', 'gather-context')
-            roles = [('reviewer', reassessment)] if reassessment is not None else [('worker', work), ('reviewer', reviewer)]
+            roles = ([('reviewer', reassessment)] if reassessment is not None else
+                     [('reviewer', reviewer)] if preflight_selected and repairs == 0 else
+                     [('worker', work), ('reviewer', reviewer)])
             for role, current in roles:
                 hit = None
-                if reuse and repairs == 0 and (role != 'reviewer' or not config.workflow.fresh_reviewer_always):
+                if (reuse and repairs == 0 and not preflight_selected
+                        and (role != 'reviewer' or not config.workflow.fresh_reviewer_always)):
                     hit = find_verification(project, files=files, context=context,
                                             kind='check' if role == 'worker' else 'review')
                 if hit:
@@ -321,6 +367,11 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                             protected_materials.append(instructions)
                             protected_materials.append(material['snapshot'])
                             current = copy.deepcopy(current)
+                            if preflight_selected and repairs == 0:
+                                current['brief']['CONTEXT']['no_change_candidate'] = (
+                                    'No writer ran. Passing local checks are not proof of absence. '
+                                    'Read the source and reproduction assertions against every original criterion. '
+                                    'Return FAIL for a real blocker, missing evidence or inadequate probes; never require a cosmetic diff.')
                             review_files = sorted(set(files) | set(material['files']) | set(instructions['files']))
                             current.update(review_files=review_files, evidence_files=review_files)
                             current['brief']['SOURCES OF TRUTH'] = review_files
@@ -333,6 +384,7 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                         except (OSError, ValueError, KeyError, TypeError):
                             return finish('failed', 'review-materials-unavailable', 'context', 'gather-context')
                     save({'schema':1, 'status':'dispatching', 'role':role, 'receipts':phases,
+                          'preflight':preflight,
                           'reserved_calls':used+1, 'max_calls':cap, 'review_repair_checkpoint':checkpoint,
                           'review_repair_recoveries':recoveries, 'review_reassessment_pending':reassessment is not None})
                     try:

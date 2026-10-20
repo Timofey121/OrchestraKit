@@ -97,6 +97,116 @@ class EvaluationCasesTests(unittest.TestCase):
         self.assertEqual(cache.get("live"), "keep")
         self.assertIsNone(cache.get("expired"))
 
+    def test_half_open_starter_treats_empty_intervals_as_non_overlapping(self) -> None:
+        namespace = {}
+        exec(CASES["half-open-interval-not-reproduced"]["files"]["interval_overlap.py"], namespace)
+        self.assertFalse(namespace["overlaps"]((3, 3), (2, 5)))
+
+    def test_already_correct_cases_require_evidence_without_rewriting_production(self) -> None:
+        for slug in ("half-open-interval-not-reproduced", "ttl-expiry-not-reproduced"):
+            with self.subTest(case=slug), tempfile.TemporaryDirectory() as temporary_directory:
+                workspace = Path(temporary_directory) / "workspace"
+                workspace.mkdir()
+                case = CASES[slug]
+                self._write_files(workspace, case["files"])
+                grader = workspace / "grader.py"
+                grader.write_text(case["tests"], encoding="utf-8")
+
+                baseline = self._run_grader(grader, workspace)
+                self.assertNotEqual(baseline.returncode, 0)
+                self.assertIn("report.json", baseline.stderr)
+
+                self._write_files(workspace, case["solution"])
+                reference = self._run_grader(grader, workspace)
+                self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+
+    def test_already_correct_cases_reject_false_evidence_and_any_production_rewrite(self) -> None:
+        for slug in ("half-open-interval-not-reproduced", "ttl-expiry-not-reproduced"):
+            with self.subTest(case=slug), tempfile.TemporaryDirectory() as temporary_directory:
+                workspace = Path(temporary_directory) / "workspace"
+                workspace.mkdir()
+                case = CASES[slug]
+                self._write_files(workspace, case["solution"])
+                grader = workspace / "grader.py"
+                grader.write_text(case["tests"], encoding="utf-8")
+
+                misleading_report = case["solution"]["report.json"].replace(
+                    '"outcome": "not_reproduced"', '"outcome": "confirmed"'
+                )
+                (workspace / "report.json").write_text(misleading_report, encoding="utf-8")
+                result = self._run_grader(grader, workspace)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+                self._write_files(workspace, case["solution"])
+                report = case["solution"]["report.json"]
+                if '"overlaps": false' in report:
+                    misleading_report = report.replace('"overlaps": false', '"overlaps": true', 1)
+                else:
+                    misleading_report = report.replace(
+                        '"observed": null', '"observed": "session"', 1
+                    )
+                (workspace / "report.json").write_text(misleading_report, encoding="utf-8")
+                result = self._run_grader(grader, workspace)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+                self._write_files(workspace, case["solution"])
+                production_path = next(path for path in case["write_paths"] if path != "report.json")
+                original = (workspace / production_path).read_text(encoding="utf-8")
+                (workspace / production_path).write_text("# equivalent rewrite\n" + original, encoding="utf-8")
+                result = self._run_grader(grader, workspace)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("unchanged", result.stderr)
+
+                self._write_files(workspace, case["solution"])
+                source = (workspace / production_path).read_text(encoding="utf-8")
+                mutant = (
+                    source.replace(" >= ", " > ")
+                    if " >= " in source
+                    else source.replace(
+                        " < min(left_end, right_end)", " <= min(left_end, right_end)"
+                    )
+                )
+                self.assertNotEqual(source, mutant)
+                (workspace / production_path).write_text(mutant, encoding="utf-8")
+                result = self._run_grader(grader, workspace)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("runtime", result.stderr)
+
+    def test_already_correct_cases_reject_invented_or_malformed_report_fields(self) -> None:
+        for slug in ("half-open-interval-not-reproduced", "ttl-expiry-not-reproduced"):
+            with self.subTest(case=slug), tempfile.TemporaryDirectory() as temporary_directory:
+                workspace = Path(temporary_directory) / "workspace"
+                workspace.mkdir()
+                case = CASES[slug]
+                self._write_files(workspace, case["solution"])
+                grader = workspace / "grader.py"
+                grader.write_text(case["tests"], encoding="utf-8")
+                report = case["solution"]["report.json"]
+
+                extra_key = report.replace(
+                    '  "observations": [', '  "invented": true,\n  "observations": ['
+                )
+                (workspace / "report.json").write_text(extra_key, encoding="utf-8")
+                self.assertNotEqual(self._run_grader(grader, workspace).returncode, 0)
+
+                if slug == "half-open-interval-not-reproduced":
+                    omitted_probe = report.replace(
+                        '    {"name": "separated_intervals", "left": [10, 20], "right": [21, 30], "overlaps": false},\n',
+                        "",
+                    )
+                    numeric_boolean = report.replace('"overlaps": false', '"overlaps": 0', 1)
+                else:
+                    omitted_probe = report.replace(
+                        '    {"name": "reported_expiry_deadline", "ttl": 10, "elapsed": 10, "expected": null, "observed": null},\n',
+                        "",
+                    )
+                    numeric_boolean = report.replace('"production_unchanged": true', '"production_unchanged": 1')
+
+                for malformed in (omitted_probe, numeric_boolean):
+                    self._write_files(workspace, case["solution"])
+                    (workspace / "report.json").write_text(malformed, encoding="utf-8")
+                    self.assertNotEqual(self._run_grader(grader, workspace).returncode, 0)
+
     def test_graders_reject_missing_error_context_and_negative_capacity(self) -> None:
         mutants = {
             "expense-csv-decimals": CASES["expense-csv-decimals"]["solution"]["expense_loader.py"].replace(
@@ -136,7 +246,7 @@ class EvaluationCasesTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_cases_have_the_required_schema_and_coverage(self) -> None:
-        self.assertEqual(len(CASES), 6)
+        self.assertEqual(len(CASES), 8)
         self.assertEqual(
             {case["category"] for case in CASES.values()},
             {"bugfix", "feature", "refactor", "analysis"},
@@ -287,7 +397,7 @@ class TaskStore:
         for relative_path, content in files.items():
             destination = workspace / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(content, encoding="utf-8")
+            destination.write_bytes(content.encode("utf-8"))
 
     @staticmethod
     def _run_grader(grader: Path, workspace: Path) -> subprocess.CompletedProcess[str]:

@@ -98,6 +98,22 @@ For a substantial independent leaf, explicitly set `size: substantial` and
 `independent: true`, then pass the compiled JSON to `workflow` or `execute`.
 Optional `task_id` and `required_capabilities` follow the ordinary job contract.
 
+For `bugfix` only, optional `reproduction_checks` uses the same nonempty check
+list format as `checks`. Supply assertions for the reported input and nearby
+behavior, with expected results from the original contract. `workflow` adds
+these commands to the required checks and runs them locally before any writer.
+If all checks pass without changing declared inputs, it launches the configured
+independent reviewer directly. PASS can finish with `no_change: true`; a blocker
+still requires repair and fresh review within the ordinary budgets. Green tests
+alone never accept the task. Without explicit reproduction checks, the ordinary
+worker/review path remains unchanged. `execute` alone does not use this shortcut.
+
+Commands are project code, not a sandbox for tests. Declare their source, inputs
+and dependencies in `evidence_files` / `files`; use temporary paths for scratch
+data. Changes to declared inputs or environment/context failures stop the
+preflight. Undeclared side effects and incomplete assertions cannot be ruled
+out automatically. The host and reviewer must assess their adequacy.
+
 An ordinary six-section job can instead add `"recipe": "refactor"`. The native
 runner adds only the selected role's steps, once per prompt and within the brief
 budget. Repairs and fresh reviews retain the recipe and original requirements.

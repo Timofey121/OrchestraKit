@@ -25,7 +25,7 @@ _RECIPES = {
     },
 }
 _REQUIRED = {'recipe', 'goal', 'files', 'scope', 'acceptance', 'checks'}
-_OPTIONAL = {'context', 'complexity', 'risk', 'size', 'independent', 'task_id', 'required_capabilities'}
+_OPTIONAL = {'context', 'complexity', 'risk', 'size', 'independent', 'task_id', 'required_capabilities', 'reproduction_checks'}
 
 
 def recipe_instructions(name: str, role: str) -> str:
@@ -78,7 +78,7 @@ def compile_recipe(project: Path, kit: Path, task: Any) -> dict:
             'CONTEXT': data.get('context', 'No additional context.'),
         },
     }
-    for key in ('task_id', 'required_capabilities'):
+    for key in ('task_id', 'required_capabilities', 'reproduction_checks'):
         if key in data:
             job[key] = data[key]
     from .execution import _validate_job

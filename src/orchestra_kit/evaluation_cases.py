@@ -8,6 +8,37 @@ allows edits only at ``write_paths``, and runs ``tests`` with Python isolation.
 from __future__ import annotations
 
 
+HALF_OPEN_INTERVAL_SOURCE = '''def overlaps(left, right):
+    left_start, left_end = left
+    right_start, right_end = right
+    if left_start > left_end or right_start > right_end:
+        raise ValueError("interval start must not exceed end")
+    return max(left_start, right_start) < min(left_end, right_end)
+'''
+
+
+EXPIRING_VALUES_SOURCE = '''class ExpiringValues:
+    def __init__(self, clock):
+        self._clock = clock
+        self._values = {}
+
+    def put(self, key, value, ttl):
+        if ttl < 0:
+            raise ValueError("ttl must not be negative")
+        self._values[key] = (value, self._clock() + ttl)
+
+    def get(self, key, default=None):
+        record = self._values.get(key)
+        if record is None:
+            return default
+        value, expires_at = record
+        if self._clock() >= expires_at:
+            del self._values[key]
+            return default
+        return value
+'''
+
+
 CASES = {
     "expense-csv-decimals": {
         "category": "bugfix",
@@ -766,5 +797,200 @@ if __name__ == "__main__":
     unittest.main(argv=[sys.argv[0]])
 ''',
         "write_paths": ["report.json"],
+    },
+    "half-open-interval-not-reproduced": {
+        "category": "bugfix",
+        "goal": "Investigate the report that touching half-open intervals overlap. Compare the reported boundary and nearby cases to the stated half-open contract; correct only a reproduced contract mismatch.",
+        "acceptance": [
+            "The contract uses intervals [start, end): an interval with start equal to end is empty and cannot overlap any interval; two valid intervals overlap only when they share at least one point. Run the ordered probes reported_touching_boundary=(10,20)/(20,30), one_unit_overlap=(10,20)/(19,30), separated_intervals=(10,20)/(21,30), and empty_interval_inside_other=(3,3)/(2,5). Do not treat a general passing test suite as proof that the report is absent.",
+            "Write report.json as an object with exactly outcome, alleged_bug, basis, production_unchanged, and observations. outcome is one of confirmed, not_reproduced, or inconclusive; alleged_bug is exactly touching half-open intervals overlap; basis is exactly targeted_runtime_probes; production_unchanged is a JSON boolean. observations is the ordered list of the four named probes above, each object has exactly name, left, right, and overlaps, and overlaps is a JSON boolean. Record values observed by directly running each probe rather than copying a presumed answer.",
+            "If targeted probes establish a contract mismatch, make the smallest corrective edit. If no contract mismatch is reproduced, preserve interval_overlap.py bytes exactly and make no speculative or cosmetic production edit; a semantically equivalent rewrite is still unnecessary.",
+        ],
+        "files": {
+            "interval_overlap.py": HALF_OPEN_INTERVAL_SOURCE,
+        },
+        "solution": {
+            "interval_overlap.py": HALF_OPEN_INTERVAL_SOURCE,
+            "report.json": '''{
+  "outcome": "not_reproduced",
+  "alleged_bug": "touching half-open intervals overlap",
+  "basis": "targeted_runtime_probes",
+  "production_unchanged": true,
+  "observations": [
+    {"name": "reported_touching_boundary", "left": [10, 20], "right": [20, 30], "overlaps": false},
+    {"name": "one_unit_overlap", "left": [10, 20], "right": [19, 30], "overlaps": true},
+    {"name": "separated_intervals", "left": [10, 20], "right": [21, 30], "overlaps": false},
+    {"name": "empty_interval_inside_other", "left": [3, 3], "right": [2, 5], "overlaps": false}
+  ]
+}
+''',
+        },
+        "tests": '''import json
+import pathlib
+import sys
+import unittest
+
+workspace = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(workspace))
+
+from interval_overlap import overlaps
+
+
+EXPECTED_SOURCE = """def overlaps(left, right):
+    left_start, left_end = left
+    right_start, right_end = right
+    if left_start > left_end or right_start > right_end:
+        raise ValueError(\"interval start must not exceed end\")
+    return max(left_start, right_start) < min(left_end, right_end)
+"""
+EXPECTED_OBSERVATIONS = [
+    {"name": "reported_touching_boundary", "left": [10, 20], "right": [20, 30], "overlaps": False},
+    {"name": "one_unit_overlap", "left": [10, 20], "right": [19, 30], "overlaps": True},
+    {"name": "separated_intervals", "left": [10, 20], "right": [21, 30], "overlaps": False},
+    {"name": "empty_interval_inside_other", "left": [3, 3], "right": [2, 5], "overlaps": False},
+]
+
+
+class HalfOpenIntervalInvestigationTests(unittest.TestCase):
+    def _report(self):
+        return json.loads((workspace / "report.json").read_text(encoding="utf-8"))
+
+    def test_production_bytes_are_unchanged(self):
+        self.assertEqual((workspace / "interval_overlap.py").read_bytes(), EXPECTED_SOURCE.encode("utf-8"))
+
+    def test_runtime_behavior_remains_correct(self):
+        for observation in EXPECTED_OBSERVATIONS:
+            with self.subTest(name=observation["name"]):
+                self.assertIs(
+                    overlaps(observation["left"], observation["right"]),
+                    observation["overlaps"],
+                )
+        with self.assertRaises(ValueError):
+            overlaps((20, 10), (20, 30))
+
+    def test_report_records_targeted_investigation(self):
+        report = self._report()
+        self.assertEqual(set(report), {"outcome", "alleged_bug", "basis", "production_unchanged", "observations"})
+        self.assertEqual(report["outcome"], "not_reproduced")
+        self.assertEqual(report["alleged_bug"], "touching half-open intervals overlap")
+        self.assertEqual(report["basis"], "targeted_runtime_probes")
+        self.assertIs(report["production_unchanged"], True)
+        self.assertEqual(report["observations"], EXPECTED_OBSERVATIONS)
+        for observation in report["observations"]:
+            self.assertEqual(set(observation), {"name", "left", "right", "overlaps"})
+            self.assertIs(type(observation["overlaps"]), bool)
+
+
+if __name__ == "__main__":
+    unittest.main(argv=[sys.argv[0]])
+''',
+        "write_paths": ["interval_overlap.py", "report.json"],
+    },
+    "ttl-expiry-not-reproduced": {
+        "category": "bugfix",
+        "goal": "Investigate the report that a cached value remains available at its expiry deadline. Compare the stateful transition and nearby timing cases to the stated TTL contract; correct only a reproduced contract mismatch.",
+        "acceptance": [
+            "For the probe domain, ttl and elapsed are non-negative integers. put records a value at the injected clock time and get must return it only while elapsed is strictly less than ttl; zero TTL has no live interval. For each fresh-state probe use injected clock=100, key=key, value=session, and default=None: just_before_deadline has ttl=10 and elapsed=9, reported_expiry_deadline has ttl=10 and elapsed=10, and zero_ttl has ttl=0 and elapsed=0. Do not treat a general passing test suite as proof that the report is absent.",
+            "Write report.json as an object with exactly outcome, alleged_bug, basis, production_unchanged, and observations. outcome is one of confirmed, not_reproduced, or inconclusive; alleged_bug is exactly cached value remains available at its expiry deadline; basis is exactly targeted_runtime_probes; production_unchanged is a JSON boolean. observations is the ordered list of the three named probes above, each object has exactly name, ttl, elapsed, expected, and observed. Record expected and observed values from direct stateful probes rather than copying a presumed answer.",
+            "If targeted probes establish a contract mismatch, make the smallest corrective edit. If no contract mismatch is reproduced, preserve expiring_values.py bytes exactly and make no speculative or cosmetic production edit; a semantically equivalent rewrite is still unnecessary.",
+        ],
+        "files": {
+            "expiring_values.py": EXPIRING_VALUES_SOURCE,
+        },
+        "solution": {
+            "expiring_values.py": EXPIRING_VALUES_SOURCE,
+            "report.json": '''{
+  "outcome": "not_reproduced",
+  "alleged_bug": "cached value remains available at its expiry deadline",
+  "basis": "targeted_runtime_probes",
+  "production_unchanged": true,
+  "observations": [
+    {"name": "just_before_deadline", "ttl": 10, "elapsed": 9, "expected": "session", "observed": "session"},
+    {"name": "reported_expiry_deadline", "ttl": 10, "elapsed": 10, "expected": null, "observed": null},
+    {"name": "zero_ttl", "ttl": 0, "elapsed": 0, "expected": null, "observed": null}
+  ]
+}
+''',
+        },
+        "tests": '''import json
+import pathlib
+import sys
+import unittest
+
+workspace = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(workspace))
+
+from expiring_values import ExpiringValues
+
+
+EXPECTED_SOURCE = """class ExpiringValues:
+    def __init__(self, clock):
+        self._clock = clock
+        self._values = {}
+
+    def put(self, key, value, ttl):
+        if ttl < 0:
+            raise ValueError(\"ttl must not be negative\")
+        self._values[key] = (value, self._clock() + ttl)
+
+    def get(self, key, default=None):
+        record = self._values.get(key)
+        if record is None:
+            return default
+        value, expires_at = record
+        if self._clock() >= expires_at:
+            del self._values[key]
+            return default
+        return value
+"""
+EXPECTED_OBSERVATIONS = [
+    {"name": "just_before_deadline", "ttl": 10, "elapsed": 9, "expected": "session", "observed": "session"},
+    {"name": "reported_expiry_deadline", "ttl": 10, "elapsed": 10, "expected": None, "observed": None},
+    {"name": "zero_ttl", "ttl": 0, "elapsed": 0, "expected": None, "observed": None},
+]
+
+
+class ExpiryInvestigationTests(unittest.TestCase):
+    def _report(self):
+        return json.loads((workspace / "report.json").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _observe(ttl, elapsed):
+        now = [100]
+        values = ExpiringValues(lambda: now[0])
+        values.put("key", "session", ttl)
+        now[0] += elapsed
+        return values.get("key")
+
+    def test_production_bytes_are_unchanged(self):
+        self.assertEqual((workspace / "expiring_values.py").read_bytes(), EXPECTED_SOURCE.encode("utf-8"))
+
+    def test_runtime_expiry_behavior_remains_correct(self):
+        for observation in EXPECTED_OBSERVATIONS:
+            with self.subTest(name=observation["name"]):
+                self.assertEqual(
+                    self._observe(observation["ttl"], observation["elapsed"]),
+                    observation["observed"],
+                )
+                self.assertEqual(observation["observed"], observation["expected"])
+        with self.assertRaises(ValueError):
+            ExpiringValues(lambda: 0).put("key", "session", -1)
+
+    def test_report_records_targeted_investigation(self):
+        report = self._report()
+        self.assertEqual(set(report), {"outcome", "alleged_bug", "basis", "production_unchanged", "observations"})
+        self.assertEqual(report["outcome"], "not_reproduced")
+        self.assertEqual(report["alleged_bug"], "cached value remains available at its expiry deadline")
+        self.assertEqual(report["basis"], "targeted_runtime_probes")
+        self.assertIs(report["production_unchanged"], True)
+        self.assertEqual(report["observations"], EXPECTED_OBSERVATIONS)
+        for observation in report["observations"]:
+            self.assertEqual(set(observation), {"name", "ttl", "elapsed", "expected", "observed"})
+
+
+if __name__ == "__main__":
+    unittest.main(argv=[sys.argv[0]])
+''',
+        "write_paths": ["expiring_values.py", "report.json"],
     },
 }
