@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 import unittest
 from pathlib import Path
@@ -64,7 +65,8 @@ class ExtensionCLITests(unittest.TestCase):
         final_report.write_text("VERDICT: PASS\nIndependent final fixture")
         final_ref = create_evidence(self.project, ["app.py"], checked["checks"],
                                     review_verdict="PASS", review_report=final_report)
-        checks = [{"command": "primary", "outcome": "pass", "evidence": "test log",
+        checks = [{"command": shlex.join(checked["checks"][0]["argv"]),
+                   "outcome": "pass", "evidence": "test log",
                    "evidence_ref": bind(checked["evidence_ref"], "check")}]
         reviews = [{"level": "final", "verdict": "PASS", "evidence": "final review",
                     "evidence_ref": bind(final_ref, "review")}]
@@ -96,6 +98,7 @@ class ExtensionCLITests(unittest.TestCase):
                                   review_verdict="PASS", review_report=leaf_report)
         else:
             extra = run_check('Path("app.py").read_text() == "working"')
+            missing["command"] = shlex.join(extra["checks"][0]["argv"])
             ref = extra["evidence_ref"]
         missing["evidence_ref"] = bind(ref, missing_kind)
 
@@ -117,6 +120,138 @@ class ExtensionCLITests(unittest.TestCase):
         self.assertEqual(shown, json.loads(finished.stdout))
         self.assertEqual((shown["task_id"], shown["status"], shown["revision"],
                           shown["verification_state"]), (task_id, "completed", 2, "current"))
+
+    def test_task_record_rejects_evidence_for_a_different_command(self):
+        task, target, checks, result = self.command_evidence_fixture()
+        history = self.project / ".orchestra/runs" / f"{task['task_id']}.json"
+        before = history.read_bytes()
+        for executed in ([sys.executable, "-c", 'print("ok")'],
+                         [*target[:-1], "PipelineAcceptance.test_other_stage"]):
+            with self.subTest(argv=executed):
+                result["checks"][0]["evidence_ref"] = self.bind_check_commands(task, checks, [executed])
+                rejected = self.record_check_result(task, result)
+                self.assertEqual(rejected.returncode, 2, rejected.stderr)
+                self.assertIn("command", rejected.stderr)
+                self.assertIn(target[-1], rejected.stderr)
+                self.assertEqual(history.read_bytes(), before)
+
+        result["checks"][0]["evidence_ref"] = self.bind_check_commands(task, checks, [target])
+        accepted = self.record_check_result(task, result)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        shown = self.show_check_task(task)
+        self.assertEqual((shown["task_id"], shown["status"], shown["revision"],
+                          shown["verification_state"]),
+                         (task["task_id"], "completed", task["revision"] + 1, "current"))
+
+    def test_task_show_marks_preexisting_mismatched_command_stale_without_writing(self):
+        task, target, checks, result = self.command_evidence_fixture()
+        result["checks"][0]["evidence_ref"] = self.bind_check_commands(task, checks, [target])
+        accepted = self.record_check_result(task, result)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(self.show_check_task(task)["verification_state"], "current")
+
+        # Reconstruct the format written by 0.13.2, which accepted this command mismatch.
+        history = self.project / ".orchestra/runs" / f"{task['task_id']}.json"
+        saved = json.loads(history.read_text())
+        wrong = shlex.join([*target[:-1], "PipelineAcceptance.test_other_stage"])
+        for command in (wrong, "python 'unterminated", None):
+            with self.subTest(command=command):
+                for record in (saved["last_result"], saved["history"][-1]["result"]):
+                    check = record["checks"][0]
+                    if command is None:
+                        check.pop("command")
+                    else:
+                        check["command"] = command
+                history.write_text(json.dumps(saved))
+                before = history.read_bytes()
+                shown = self.show_check_task(task)
+                self.assertEqual((shown["status"], shown["revision"], shown["verification_state"]),
+                                 ("completed", saved["revision"], "stale"))
+                self.assertEqual(history.read_bytes(), before)
+
+    def test_task_accepts_one_certificate_for_multiple_quoted_commands(self):
+        task, target, checks, result = self.command_evidence_fixture()
+        code = "from pathlib import Path; Path('command-ran').touch(); print('quoted value')"
+        additional = [sys.executable, "-c", code, "report name"]
+        ref = self.bind_check_commands(task, checks, [additional, target])
+        marker = self.project / "command-ran"
+        marker.unlink()
+        result["checks"][0]["evidence_ref"] = ref
+        result["checks"].append({"command": shlex.join(additional[:-1]) + r" report\ name",
+                                 "outcome": "pass", "evidence": "check log",
+                                 "required": True, "evidence_ref": ref})
+        result["checks"].append({"command": "optional diagnostic", "outcome": "pass",
+                                 "evidence": "optional", "required": False, "evidence_ref": ref})
+        accepted = self.record_check_result(task, result)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(self.show_check_task(task)["verification_state"], "current")
+        self.assertFalse(marker.exists())
+
+    def command_evidence_fixture(self):
+        from orchestra_kit.evidence import create_evidence
+
+        project = str(self.project)
+        initialized = self.run_cli("init", project)
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        source = self.project / "acceptance/ci_dry_run.py"
+        source.parent.mkdir()
+        source.write_text(
+            "import unittest\n"
+            "class PipelineAcceptance(unittest.TestCase):\n"
+            "    def test_retry_only_current_stage(self): self.assertEqual(1, 1)\n"
+            "    def test_other_stage(self): self.assertEqual(2, 2)\n"
+            "if __name__ == '__main__': unittest.main()\n",
+        )
+        target = [sys.executable, "acceptance/ci_dry_run.py",
+                  "PipelineAcceptance.test_retry_only_current_stage"]
+        started = self.run_cli("task", "start", project, "--goal", "Verify stage retry")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        task = json.loads(started.stdout)
+        checks = {"files": ["acceptance/ci_dry_run.py"]}
+        receipt = self.run_check_commands(checks, [target])
+        report = self.project / "final-review.txt"
+        report.write_text("VERDICT: PASS\nIndependent final review fixture")
+        review_ref = create_evidence(self.project, checks["files"], receipt["checks"],
+                                     review_verdict="PASS", review_report=report)
+        result = {"status": "completed", "summary": "Stage retry exercised",
+                  "changed_files": checks["files"],
+                  "checks": [{"command": shlex.join(target), "outcome": "pass",
+                              "evidence": "check log"}],
+                  "acceptance": [{"criterion": "Stage retry exercised", "satisfied": True,
+                                  "evidence": "documented check"}],
+                  "reviews": [{"level": "final", "verdict": "PASS", "evidence": "review report",
+                               "evidence_ref": self.bind_command_evidence(task, review_ref, "review")}]}
+        return task, target, checks, result
+
+    def run_check_commands(self, checks, commands):
+        request = self.project / "check-commands.json"
+        request.write_text(json.dumps({**checks, "checks": [
+            {"argv": argv, "failure_cause": "implementation"} for argv in commands
+        ]}))
+        ran = self.run_cli("evidence", "run", str(self.project), "--input", str(request))
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        return json.loads(ran.stdout)
+
+    def bind_command_evidence(self, task, ref, kind):
+        bound = self.run_cli("evidence", "bind", str(self.project), "--ref", ref,
+                             "--kind", kind, "--task-id", task["task_id"])
+        self.assertEqual(bound.returncode, 0, bound.stderr)
+        return json.loads(bound.stdout)["evidence_ref"]
+
+    def bind_check_commands(self, task, checks, commands):
+        receipt = self.run_check_commands(checks, commands)
+        return self.bind_command_evidence(task, receipt["evidence_ref"], "check")
+
+    def record_check_result(self, task, result):
+        path = self.project / "result.json"
+        path.write_text(json.dumps(result))
+        return self.run_cli("task", "record", str(self.project), task["task_id"],
+                            "--input", str(path), "--revision", str(task["revision"]))
+
+    def show_check_task(self, task):
+        shown = self.run_cli("task", "show", str(self.project), task["task_id"])
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        return json.loads(shown.stdout)
 
     def settlement_fixture(self):
         from orchestra_kit.evidence import create_evidence

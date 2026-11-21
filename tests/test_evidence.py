@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 import tempfile
 import unittest
@@ -46,7 +47,7 @@ class EvidenceTests(unittest.TestCase):
         from orchestra_kit.state import start_task,record_task
         run=start_task(self.project,KIT,'work')
         checked=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','pass'],'failure_cause':'implementation'}])
-        result={'status':'completed','summary':'done','changed_files':['app.py'],'checks':[{'command':'actual','outcome':'pass','evidence':checked['evidence_ref'],'evidence_ref':checked['evidence_ref']}], 'acceptance':[{'criterion':'works','satisfied':True,'evidence':'root inspected'}], 'reviews':[{'level':'final','verdict':'PASS','evidence':'review','evidence_ref':checked['evidence_ref']}]}
+        result={'status':'completed','summary':'done','changed_files':['app.py'],'checks':[{'command':shlex.join(checked['checks'][0]['argv']),'outcome':'pass','evidence':checked['evidence_ref'],'evidence_ref':checked['evidence_ref']}], 'acceptance':[{'criterion':'works','satisfied':True,'evidence':'root inspected'}], 'reviews':[{'level':'final','verdict':'PASS','evidence':'review','evidence_ref':checked['evidence_ref']}]}
         with self.assertRaisesRegex(ValueError,'review'):
             record_task(self.project,KIT,run['task_id'],result,expected_revision=0)
         report=self.project/'review.txt';report.write_text('VERDICT: PASS\nIndependent fixture reviewer')
@@ -73,7 +74,7 @@ class EvidenceTests(unittest.TestCase):
         checked=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','pass'],'failure_cause':'implementation'}])
         report=self.project/'leaf-review.txt';report.write_text('VERDICT: PASS\nIndependent leaf fixture reviewer')
         leaf=create_evidence(self.project,['app.py'],checked['checks'],review_verdict='PASS',owner='leaf-reviewer',review_report=report)
-        result={'status':'completed','summary':'done','changed_files':['app.py'],'checks':[{'command':'actual','outcome':'pass','evidence':'checked','evidence_ref':checked['evidence_ref']}],'acceptance':[{'criterion':'works','satisfied':True,'evidence':'root inspected'}],'reviews':[{'level':level,'verdict':'PASS','evidence':'review','evidence_ref':leaf} for level in ['leaf','final']]}
+        result={'status':'completed','summary':'done','changed_files':['app.py'],'checks':[{'command':shlex.join(checked['checks'][0]['argv']),'outcome':'pass','evidence':'checked','evidence_ref':checked['evidence_ref']}],'acceptance':[{'criterion':'works','satisfied':True,'evidence':'root inspected'}],'reviews':[{'level':level,'verdict':'PASS','evidence':'review','evidence_ref':leaf} for level in ['leaf','final']]}
         with self.assertRaisesRegex(ValueError,'separate review'):
             record_task(self.project,KIT,run['task_id'],result,expected_revision=0)
         report=self.project/'final-review.txt';report.write_text('VERDICT: PASS\nIndependent final fixture reviewer')

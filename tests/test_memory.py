@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import os
 import sys
 import tempfile
@@ -60,7 +61,8 @@ class SolutionMemoryTests(unittest.TestCase):
             "status": "completed", "summary": "Fixed duplicate requests",
             "completed_steps": ["normalized input"], "next_steps": [],
             "changed_files": ["src/app.py"],
-            "checks": [{"command": "test", "outcome": "pass", "evidence": "pass", "evidence_ref": check_ref}],
+            "checks": [{"command": shlex.join(checked["checks"][0]["argv"]),
+                        "outcome": "pass", "evidence": "pass", "evidence_ref": check_ref}],
             "acceptance": [{"criterion": "duplicates are rejected", "satisfied": True, "evidence": "test"}],
             "reviews": [{"level": "final", "verdict": "PASS", "evidence": "review", "evidence_ref": review_ref}],
             "metrics": {},

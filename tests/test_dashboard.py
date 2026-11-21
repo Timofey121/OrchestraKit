@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import importlib
 import json
+import shlex
 import sqlite3
 import sys
 import tempfile
@@ -328,7 +329,9 @@ class DashboardTests(unittest.TestCase):
         payload = {"generated_by": "OrchestraKit", "task_id": task_id, "revision": 1, "goal": "Verify",
                    "status": "completed", "updated_at": "2026-10-05", "history": [],
                    "metrics": {}, "last_result": {"changed_files": ["subject.txt"],
-                   "checks": [{"required": True, "evidence_ref": evidence["evidence_ref"]}], "reviews": []}}
+                   "checks": [{"command": shlex.join(evidence["checks"][0]["argv"]),
+                               "outcome": "pass", "evidence": "check log", "required": True,
+                               "evidence_ref": evidence["evidence_ref"]}], "reviews": []}}
         (self.project / ".orchestra" / "runs" / (task_id + ".json")).write_text(json.dumps(payload), encoding="utf-8")
         dashboard = self.dashboard()
         overview = dashboard.snapshot(refresh=True)

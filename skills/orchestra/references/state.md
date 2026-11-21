@@ -59,8 +59,11 @@ its confirmed criteria.
 Before recording `completed`, reconcile the confirmed criteria with actual
 outputs. With `require_fresh_evidence = true`, verify every required check and
 every review included in the result. Each needs a current `evidence_ref` for
-the relevant project files, including all `changed_files`. Keep separate
-certificates for leaf and final review and confirm reviewer independence.
+the relevant project files, including all `changed_files`. For checks, record
+the exact command and arguments from the certificate using POSIX shell quoting
+(for example, Python's `shlex.join(argv)`). A certificate can cover multiple
+checks when it contains each command. Keep separate certificates for leaf
+and final review and confirm reviewer independence.
 
 - Run a missing required check with `evidence run PROJECT --input CHECKS.json`.
 - After inspecting current evidence from a previous run, adopt it for the

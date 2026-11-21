@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -189,6 +190,33 @@ def _validate_result(config: ProjectConfig, data: Any) -> None:
             raise ValueError("completed tasks cannot have pending steps or unresolved failures")
 
 
+def _verify_task_evidence(project_root: Path, result: dict[str, Any], *, require_fresh: bool = False) -> bool:
+    from .evidence import verify_evidence
+
+    records = [("check", check) for check in result.get("checks", []) if check.get("required", True)]
+    records.extend(("review", review) for review in result.get("reviews", []))
+    required_files = result.get("changed_files", [])
+    fully_bound = bool(records)
+    for kind, record in records:
+        ref = record.get("evidence_ref")
+        if not ref:
+            if require_fresh:
+                raise ValueError(f"completion requires fresh {kind} evidence_ref")
+            fully_bound = False
+            continue
+        certificate = verify_evidence(project_root, ref, kind=kind, required_files=required_files)
+        if kind == "check":
+            command = record.get("command")
+            _text(command, "required check command")
+            try:
+                argv = shlex.split(command)
+            except ValueError as exc:
+                raise ValueError(f"invalid quoting in required check command: {command!r}") from exc
+            if not argv or not any(check.get("argv") == argv for check in certificate["checks"]):
+                raise ValueError(f"evidence_ref does not match required check command: {command!r}")
+    return fully_bound
+
+
 def record_task(project_root: Path, kit_root: Path, task_id: str, result: Any, *, expected_revision: int) -> dict[str, Any]:
     policy = fingerprint_paths(project_root,[".orchestra/project.toml"])
     config = load_config(project_root, kit_root)
@@ -210,16 +238,8 @@ def record_task(project_root: Path, kit_root: Path, task_id: str, result: Any, *
             raise ValueError("task revision changed; re-read before recording")
         if payload["status"] == "completed":
             raise ValueError("completed task cannot be reopened; start a new task")
-        if result['status']=='completed':
-            from .evidence import verify_evidence
-            required_files=result.get('changed_files',[])
-            for kind,records in [('check',result.get('checks',[])),('review',result.get('reviews',[]))]:
-                for record in records:
-                    if kind=='check' and not record.get('required',True):continue
-                    ref=record.get('evidence_ref')
-                    if config.workflow.require_fresh_evidence and not ref:
-                        raise ValueError(f'completion requires fresh {kind} evidence_ref')
-                    if ref:verify_evidence(project_root,ref,kind=kind,required_files=required_files)
+        if result["status"] == "completed":
+            _verify_task_evidence(project_root, result, require_fresh=config.workflow.require_fresh_evidence)
         supplied = result.get("metrics", {})
         first = payload["revision"] == 0
         for name in METRICS:
@@ -242,14 +262,13 @@ def record_task(project_root: Path, kit_root: Path, task_id: str, result: Any, *
 def show_task(project_root: Path, task_id: str) -> dict[str, Any]:
     payload = _read(_task_path(project_root, task_id))
     result={key: value for key, value in payload.items() if key != "history"}
-    if payload['status']=='completed':
-        from .evidence import verify_evidence
-        refs=[(kind,r.get('evidence_ref')) for kind,records in [('check',payload['last_result'].get('checks',[])),('review',payload['last_result'].get('reviews',[]))] for r in records if kind!='check' or r.get('required',True)]
-        result['verification_state']='current' if refs and all(ref for _,ref in refs) else 'unbound'
+    if payload["status"] == "completed":
         try:
-            for kind,ref in refs:
-                if ref:verify_evidence(project_root,ref,kind=kind,required_files=payload['last_result'].get('changed_files',[]))
-        except (ValueError,OSError):result['verification_state']='stale'
+            bound = _verify_task_evidence(project_root, payload["last_result"])
+        except (ValueError, OSError):
+            result["verification_state"] = "stale"
+        else:
+            result["verification_state"] = "current" if bound else "unbound"
     return result
 
 

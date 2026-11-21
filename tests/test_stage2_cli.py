@@ -1,6 +1,7 @@
 """Exercise the public stage-two commands rather than only library helpers."""
 from pathlib import Path
 import json
+import shlex
 import os
 import subprocess
 import sys
@@ -78,7 +79,8 @@ class StageTwoCliTests(unittest.TestCase):
         record_task(self.root, KIT, task['task_id'], {
             'status': 'completed', 'summary': 'Fixed parser', 'completed_steps': ['fixed'],
             'next_steps': [], 'changed_files': ['app.py'],
-            'checks': [{'command': 'check', 'outcome': 'pass', 'evidence': 'check log',
+            'checks': [{'command': shlex.join(checked['checks'][0]['argv']),
+                        'outcome': 'pass', 'evidence': 'check log',
                         'evidence_ref': refs['check']}],
             'reviews': [{'level': 'final', 'verdict': 'PASS', 'evidence': 'fixture review',
                          'evidence_ref': refs['review']}],
