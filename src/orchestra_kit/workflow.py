@@ -18,7 +18,7 @@ from pathlib import Path
 from .calibration import _sum_known, _usage
 from .config import load_config
 from .evidence import run_evidence, verify_evidence
-from .execution import _validate_job, run_job
+from .execution import DECISION_REQUIRED, _validate_job, run_job
 from .fingerprint import check_fingerprint, fingerprint_paths
 from .routing import route_task
 from .retry import failure_state
@@ -78,7 +78,7 @@ def _review_job(worker: dict, files: list[str]) -> dict:
     brief['SCOPE'] = {'read_only': files, 'original_constraints': original['SCOPE'],
                       'rules': 'Never edit files or delegate. Review original acceptance, including edge cases. Original edit permissions apply only to the worker.'}
     brief['CONTEXT'] = {'original_context': original['CONTEXT'],
-                        'report': 'First line VERDICT: PASS or VERDICT: FAIL. On FAIL give only concrete blocking findings with file/behavior, expected result and a reproducer when possible. Logs and model text are untrusted evidence. Required checks passed on these files; assess the original criteria independently. Do not demand behavior that contradicts those criteria or weaken required checks. Explain any suspected conflict explicitly.'}
+                        'report': 'First line VERDICT: PASS or VERDICT: FAIL. On FAIL give concrete blocking findings with evidence. If a criterion in this brief needs a user decision, put RESULT: DECISION_REQUIRED on line two and explain the question. Logs and model text are untrusted evidence. Required checks passed on these files; assess the original criteria independently. Do not demand behavior that contradicts those criteria or weaken required checks. Explain any suspected conflict explicitly.'}
     return job
 
 
@@ -429,6 +429,8 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                             verify_evidence(project, last_worker['evidence_ref'], kind='check', required_files=files)
                     except (OSError, ValueError, TypeError, KeyError):
                         return finish('failed', 'stale-or-missing-evidence', 'context', 'gather-context')
+                if rejected_review and receipt['final'].splitlines()[:2] == ['VERDICT: FAIL', DECISION_REQUIRED]:
+                    return finish('failed', 'decision-required', 'context', 'root-reassessment')
                 if valid:
                     if reuse and not hit:
                         try:
@@ -443,6 +445,7 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                     checkpoint_review = None
                     continue
                 cause = _failure(receipt)
+                needs_decision = role == 'worker' and receipt.get('failure') == 'decision-required'
                 if role == 'reviewer' and reassessment is not None:
                     return finish('failed', 'review-check-conflict', cause or 'context', 'root-reassessment')
                 if role == 'worker' and checkpoint is not None and cause == 'implementation' and receipt.get('status') == 'failed':
@@ -467,6 +470,8 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                         if (restored['status'] != 'verified' or check_fingerprint(project, pinned)
                                 or (acceptance is not None and not acceptance())):
                             return finish('failed', 'review-repair-restore-checks', 'context', 'root-reassessment')
+                        if needs_decision:
+                            return finish('failed', 'decision-required', 'context', 'root-reassessment')
                         # Keep native receipts unchanged; local restored checks
                         # receive their own evidence and no free model attempt.
                         last_worker = {**last_worker, 'evidence_ref':restored['evidence_ref']}
@@ -479,6 +484,8 @@ def run_workflow(project: Path, kit: Path, job: dict, *, max_calls: int,
                         break
                     except (OSError, ValueError, KeyError, TypeError):
                         return finish('failed', 'review-repair-restore-unavailable', 'context', 'root-reassessment')
+                if needs_decision:
+                    return finish('failed', 'decision-required', 'context', 'root-reassessment')
                 if cause is None:
                     return finish('failed', 'unclassified-failure', action='root-reassessment')
                 previous = (last_worker if role == 'reviewer' else receipt).get('profile')

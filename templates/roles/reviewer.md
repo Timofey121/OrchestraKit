@@ -23,3 +23,9 @@ Use exactly PASS or FAIL, never “pass with notes.” PASS requires zero blocki
 findings. Tie every finding to a concrete file, behavior, command, or acceptance
 criterion. Keep optional improvements non-blocking. Missing evidence must be
 reported as an evidence limit and is blocking when the brief requires it.
+
+PASS covers only this brief. If an original criterion requires a missing user
+decision, start with `VERDICT: FAIL` and put `RESULT: DECISION_REQUIRED` on
+the second line. Give the root the affected criterion, evidence and question.
+Report decisions outside the brief as evidence limits without blocking a local
+PASS. The root owns whole-task acceptance and asks the user.

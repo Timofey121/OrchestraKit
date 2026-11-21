@@ -148,7 +148,9 @@ does not replace the model selected for the active root Codex chat.
 
 Keep small or tightly coupled work in the root session. Use multi-agent
 delegation when two or more independent, substantial tracks will materially
-improve speed or verification quality. Give every leaf a bounded brief with:
+improve speed or verification quality. Apply the execution contract's decision
+check before giving a dependent brief and again before final acceptance.
+Give every leaf a bounded brief with:
 
 - goal and explicit scope;
 - sources of truth and relevant paths;
@@ -330,6 +332,12 @@ developer, current user, or nearer `AGENTS.md` instructions.
 
 ## Leaf task brief
 
+Before dispatching dependent work and before completion, the root reconciles
+the original request, confirmed acceptance criteria and actual evidence. Check
+available sources and prior decisions first. Ask the user once for the remaining
+material decisions, keep dependent plans conditional, and verify the agreed
+portion independently. Proceed directly when the contract is known.
+
 Every delegated leaf receives exactly these sections:
 
 ```text
@@ -352,7 +360,18 @@ reviewed. The reviewer is independent, read-only, never fixes findings, and must
 return exactly `VERDICT: PASS` or `VERDICT: FAIL`. A PASS has no blocking
 findings; observations remain non-blocking.
 
-On FAIL, the root sends only the blocking findings and original acceptance
+A local PASS applies to the bounded brief. Record it as leaf evidence when the
+whole task still has an open criterion. Use `task record` with `blocked` when
+waiting on the answer, `acceptance[].satisfied: false` for the open criterion
+and `next_steps` for the question and dependent verification. Resume from the
+current revision after the user decides. Reserve final PASS for whole-task review.
+
+A worker starts its report with `RESULT: DECISION_REQUIRED` if its brief
+cannot be fulfilled without a user decision. A reviewer uses `VERDICT: FAIL`
+with `RESULT: DECISION_REQUIRED` on the second line when an original criterion
+depends on such a decision. Return the affected criterion and question to the
+root. This outcome calls for root reassessment without a repair attempt.
+For an implementation FAIL, the root sends only the blocking findings and original acceptance
 criteria into a bounded repair cycle, then requests a new review. Stop after
 `{workflow.max_repair_cycles}` failed repair cycles and report the unresolved
 blocker to the user. Never relabel an unverified result as complete.

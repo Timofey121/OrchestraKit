@@ -21,5 +21,7 @@ RISKS / NOTES
 
 For each acceptance criterion, report satisfied or unsatisfied with evidence.
 Resolve ordinary implementation choices autonomously. If a material decision
-falls outside the brief, return it to the root as `DECISION_REQUIRED`; do not
-ask the user directly.
+is needed to fulfill the brief, start with `RESULT: DECISION_REQUIRED` and
+give the root the affected criterion, evidence and question. Preserve verified
+work and wait for the decision on dependent work. Do not ask the user directly.
+`RESULT: COMPLETE` applies only to this brief.

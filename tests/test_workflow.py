@@ -177,6 +177,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('Reject signed zero',json.dumps(self.calls[-1][0]['brief']))
         self.assertEqual(self.calls[-1][0]['brief']['ACCEPTANCE CRITERIA'],self.job['brief']['ACCEPTANCE CRITERIA'])
 
+    def test_decision_during_failed_repair_restores_last_passing_files(self):
+        normal, good = self.review_regression_runner()
+
+        def runner(project, kit, job, **kwargs):
+            receipt = normal(project, kit, job, **kwargs)
+            if len(self.calls) == 3:
+                self.assertEqual(receipt['failure'], 'implementation')
+                receipt.update(failure='decision-required',
+                               final='RESULT: DECISION_REQUIRED\nConfirm the signed-zero rule.')
+            return receipt
+
+        result = self.run_flow(runner=runner)
+        self.assertEqual(result['stop_reason'], 'decision-required')
+        self.assertEqual(result['review_repair_recoveries'][0]['status'], 'restored')
+        self.assertEqual((self.project / 'app.py').read_bytes(), good)
+        self.assertEqual(result['model_attempts'], 3)
+        self.assertFalse(result['quality_passed'])
+
     def test_recipes_preserve_review_repair_and_original_requirements(self):
         for kind in ('bugfix', 'feature', 'refactor'):
             with self.subTest(kind=kind):
@@ -294,6 +312,41 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result['usage']['totals']['total_tokens'],48)
         self.assertEqual(result['repairs'],1)
         self.assertEqual(result['model_attempts'],4)
+
+    @unittest.skipIf(os.name == 'nt', 'Native leaf execution requires POSIX host locks')
+    def test_native_decision_required_returns_to_root_without_repair(self):
+        script = Path(self.temp.name) / 'decision_codex.py'
+        script.write_text("""import json, sys
+prompt = sys.stdin.read()
+review = 'review_original_goal' in prompt
+decision = 'RESULT: DECISION_REQUIRED\\nWhat happens after cancellation?'
+if review:
+    final = 'VERDICT: FAIL\\n' + decision
+elif sys.argv[1] == 'worker':
+    final = decision
+else:
+    final = 'RESULT: COMPLETE'
+print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': final}}))
+print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10,
+      'cached_input_tokens': 4, 'output_tokens': 2}}))
+""")
+        for role, launches in (('worker', 1), ('reviewer', 2)):
+            with self.subTest(role=role):
+                outcome = workflow.run_workflow(
+                    self.project, KIT, self.job, max_calls=6,
+                    codex_command=[sys.executable, str(script), role],
+                )
+                self.assertEqual(outcome['stop_reason'], 'decision-required')
+                self.assertEqual(outcome['failure_cause'], 'context')
+                self.assertEqual(outcome['next_action'], 'root-reassessment')
+                self.assertFalse(outcome['quality_passed'])
+                self.assertEqual(outcome['repair_decisions'], 0)
+                self.assertEqual(outcome['model_attempts'], launches)
+                self.assertEqual(outcome['usage']['totals']['total_tokens'], launches * 12)
+                receipt = outcome['receipts'][-1]['receipt']
+                self.assertIn('What happens after cancellation?', receipt['final'])
+                self.assertEqual(receipt['attempts'][0]['checks'][0]['returncode'], 0)
+                self.assertIsNotNone(receipt['evidence_ref'])
 
     def test_failed_review_never_becomes_success_when_repairs_exhausted(self):
         def runner(project,kit,job,**kwargs):

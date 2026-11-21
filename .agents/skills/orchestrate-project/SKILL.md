@@ -58,7 +58,9 @@ does not replace the model selected for the active root Codex chat.
 
 Keep small or tightly coupled work in the root session. Use multi-agent
 delegation when two or more independent, substantial tracks will materially
-improve speed or verification quality. Give every leaf a bounded brief with:
+improve speed or verification quality. Apply the execution contract's decision
+check before giving a dependent brief and again before final acceptance.
+Give every leaf a bounded brief with:
 
 - goal and explicit scope;
 - sources of truth and relevant paths;

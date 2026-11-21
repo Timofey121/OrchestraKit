@@ -29,6 +29,8 @@ from .routing import BRIEF_SECTIONS, route_task
 from .retry import failure_state, repeated_failure
 from .recipes import recipe_instructions, render_recipe_brief
 
+DECISION_REQUIRED = "RESULT: DECISION_REQUIRED"
+
 try:  # Windows has no advisory file-lock primitive compatible with flock.
     import fcntl
 except ImportError:  # pragma: no cover - exercised on Windows hosts.
@@ -576,8 +578,9 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
                 return finish("failed", failure="leaf did not produce turn.completed with a nonempty final", attempts=attempts, logs=[str(a["log"]) for a in attempts])
             if len(final) > config.context.max_result_chars:
                 return finish("failed", failure="leaf final exceeds configured result budget; gather context and narrow the task", attempts=attempts, logs=[str(a["log"]) for a in attempts])
+            needs_decision = data['role'] == 'worker' and final.splitlines()[0] == DECISION_REQUIRED
             normalizations=[]
-            if data.get('result_contract') is not None:
+            if data.get('result_contract') is not None and not needs_decision:
                 from .contracts import normalize_result
                 try:final,normalizations=normalize_result(final,data['result_contract'])
                 except (ValueError,TypeError):
@@ -648,10 +651,17 @@ def run_job(project: Path, kit_root: Path, job: dict, *, codex_command: Sequence
                                   attempts=attempts, logs=logs, usage=_observed_usage(logs),
                                   evidence_ref=evidence_ref, normalizations=normalizations,
                                   write_scope=scope)
+                if needs_decision:
+                    return finish('failed', failure='decision-required', final=final,
+                                  attempts=attempts, logs=logs, evidence_ref=evidence_ref,
+                                  write_scope=scope)
                 return finish("verified", final=final, attempts=attempts, logs=logs,
                                 usage=_observed_usage(logs),evidence_ref=evidence_ref,normalizations=normalizations,write_scope=scope)
             if failure == 'implementation':
                 item['retry_state'] = failure_state(execution_project, evidence_files, outcomes)
+                if needs_decision:
+                    return finish('failed', failure='decision-required', final=final,
+                                  attempts=attempts, logs=[a['log'] for a in attempts])
             if failure in {"context", "environment"}:
                 break
         return finish("failed", failure=failure_reason or failure or "repair budget exhausted",

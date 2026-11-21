@@ -47,6 +47,14 @@ Check outcomes: `pass`, `fail`, `skipped`. Review verdicts: `PASS`, `FAIL`; leve
 For multiple leaves or packages, include a separate identified review record
 for each in the evidence and verify coverage in the root.
 
+When a local check and leaf review pass but a user decision still blocks
+overall acceptance, retain both results. Record `status: blocked`, the open
+criterion with `satisfied: false` and the reason in `evidence`. Put the
+concrete question and dependent verification in `next_steps`. On the answer,
+reconcile the original criteria and record progress at the current revision.
+Only record final review and completion when the whole requested outcome meets
+its confirmed criteria.
+
 Separate review levels require separate evidence certificates when refs are
 provided. The root still checks reviewer independence: different certificate
 identifiers cannot prove different people or model sessions. Task admission

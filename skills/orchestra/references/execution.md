@@ -129,7 +129,15 @@ covering the implementation, tests and relevant inputs. The command builds a
 read-only reviewer brief from the original task and final file list. It retains
 all original criteria and scope during repair. Small coupled work stays in root.
 
-The shared configured repair budget includes test failures and reviewer FAILs.
+The shared configured repair budget includes implementation check failures and
+review findings that require implementation fixes.
+When a worker starts its report with `RESULT: DECISION_REQUIRED`, or a reviewer
+puts that line immediately after `VERDICT: FAIL`, the workflow returns
+`stop_reason: decision-required` and `next_action: root-reassessment` without
+launching a repair. The root verifies the reported gap against the original
+task. A local `verified` receipt covers the bounded job. Use
+[task state](state.md) for whole-task acceptance.
+
 Each native leaf gets one attempt; the controller chooses repairs/escalation
 from typed check causes, never free-form failure guesses. Missing context,
 environment and capability failures return to root. Unknown counters stop new
