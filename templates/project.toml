@@ -11,8 +11,8 @@ default_profile = "strong"
 [workflow]
 mode = "adaptive"
 max_repair_cycles = 2
-# Bind check/review artifacts to explicit files. Enable for completion enforcement.
-require_fresh_evidence = false
+# Require current evidence for mandatory checks and recorded reviews.
+require_fresh_evidence = true
 # Optional maximum dispatches in the durable queue / attempts in one native job.
 # max_launches = 12
 # Optional observed input+output threshold before another automatic retry.

@@ -25,9 +25,11 @@ class ExecutionTests(unittest.TestCase):
         self.project = Path(self.temp.name) / "project"
         self.project.mkdir()
         (self.project / ".orchestra").mkdir()
-        (self.project / ".orchestra" / "project.toml").write_text(
-            (KIT / "templates" / "project.toml").read_text(), encoding="utf-8"
-        )
+        # Exercise legacy jobs which can omit evidence subjects.
+        config = (KIT / "templates/project.toml").read_text()
+        self.legacy_config = config.replace("require_fresh_evidence = true",
+                                            "require_fresh_evidence = false")
+        (self.project / ".orchestra/project.toml").write_text(self.legacy_config, encoding="utf-8")
         self.cli = Path(self.temp.name) / "fake-codex.py"
         self.cli.write_text(textwrap.dedent("""\
             #!/usr/bin/env python3
@@ -96,7 +98,7 @@ class ExecutionTests(unittest.TestCase):
 
     def set_observed_token_limit(self, limit: int) -> None:
         config = self.project / '.orchestra' / 'project.toml'
-        config.write_text((KIT / 'templates' / 'project.toml').read_text().replace(
+        config.write_text(self.legacy_config.replace(
             'max_repair_cycles = 2', f'max_repair_cycles = 2\nmax_observed_tokens = {limit}'),
             encoding='utf-8')
 

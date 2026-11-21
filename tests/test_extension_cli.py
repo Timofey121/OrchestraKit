@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from pathlib import Path
 from tests import test_cli
 
 class ExtensionCLITests(unittest.TestCase):
@@ -8,14 +9,121 @@ class ExtensionCLITests(unittest.TestCase):
     tearDown=test_cli.CliTests.tearDown if hasattr(test_cli,'CliTests') else test_cli.CLITests.tearDown
     run_cli=test_cli.CliTests.run_cli if hasattr(test_cli,'CliTests') else test_cli.CLITests.run_cli
 
+    def test_task_rejects_unbound_leaf_pass_even_with_bound_final_pass(self):
+        self.assert_task_completion_requires_binding("review")
+
+    def test_task_rejects_unbound_additional_required_check(self):
+        self.assert_task_completion_requires_binding("check")
+
+    def assert_task_completion_requires_binding(self, missing_kind):
+        from orchestra_kit.evidence import create_evidence
+
+        def call(*args):
+            result = self.run_cli(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+
+        def run_check(expression):
+            source = self.project / "checks.json"
+            code = f"from pathlib import Path; assert {expression}"
+            source.write_text(json.dumps({"files": ["app.py"], "checks": [{
+                "argv": [sys.executable, "-c", code],
+                "failure_cause": "implementation",
+            }]}))
+            return call("evidence", "run", project, "--input", str(source))
+
+        def bind(ref, kind):
+            binding = call("evidence", "bind", project, "--ref", ref,
+                           "--kind", kind, "--task-id", task_id)
+            self.assertEqual(binding["task_id"], task_id)
+            self.assertEqual(binding["adopted_from"], ref)
+            return binding["evidence_ref"]
+
+        project = str(self.project)
+        initialized = self.run_cli("init", project)
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        source = self.project / "app.py"
+        source.write_text("working")
+        task_id = call("task", "start", project, "--goal", "Verify the bounded change")["task_id"]
+        result_file = self.project / "result.json"
+
+        def record(data, revision):
+            result_file.write_text(json.dumps(data))
+            return self.run_cli("task", "record", project, task_id, "--input",
+                                str(result_file), "--revision", str(revision))
+
+        opened = record({"status": "blocked", "summary": "Evidence still missing",
+                         "next_steps": ["Bind the missing certificate"]}, 0)
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        saved = call("task", "show", project, task_id)
+        history = self.project / ".orchestra/runs" / f"{task_id}.json"
+        original_history = history.read_bytes()
+
+        checked = run_check('Path("app.py").is_file()')
+        final_report = self.project / "final.txt"
+        final_report.write_text("VERDICT: PASS\nIndependent final fixture")
+        final_ref = create_evidence(self.project, ["app.py"], checked["checks"],
+                                    review_verdict="PASS", review_report=final_report)
+        checks = [{"command": "primary", "outcome": "pass", "evidence": "test log",
+                   "evidence_ref": bind(checked["evidence_ref"], "check")}]
+        reviews = [{"level": "final", "verdict": "PASS", "evidence": "final review",
+                    "evidence_ref": bind(final_ref, "review")}]
+        if missing_kind == "review":
+            missing = {"level": "leaf", "verdict": "PASS", "evidence": "leaf review"}
+            reviews.insert(0, missing)
+        else:
+            missing = {"command": "additional", "outcome": "pass", "required": True,
+                       "evidence": "additional check log"}
+            checks.append(missing)
+
+        completed = {"status": "completed", "summary": "All criteria met",
+                     "changed_files": ["app.py"], "checks": checks, "reviews": reviews,
+                     "acceptance": [{"criterion": "works", "satisfied": True,
+                                     "evidence": "confirmed by the checks"}]}
+
+        def assert_rejected(message):
+            refused = record(completed, saved["revision"])
+            self.assertEqual(refused.returncode, 2, refused.stderr)
+            self.assertIn(message, refused.stderr)
+            self.assertEqual(call("task", "show", project, task_id), saved)
+            self.assertEqual(history.read_bytes(), original_history)
+
+        assert_rejected(f"completion requires fresh {missing_kind} evidence_ref")
+        if missing_kind == "review":
+            leaf_report = self.project / "leaf.txt"
+            leaf_report.write_text("VERDICT: PASS\nIndependent leaf fixture")
+            ref = create_evidence(self.project, ["app.py"], checked["checks"],
+                                  review_verdict="PASS", review_report=leaf_report)
+        else:
+            extra = run_check('Path("app.py").read_text() == "working"')
+            ref = extra["evidence_ref"]
+        missing["evidence_ref"] = bind(ref, missing_kind)
+
+        if missing_kind == "review":
+            for artifact, message in [(source, "stale evidence"),
+                                      (Path(checked["checks"][0]["log"]), "artifact changed"),
+                                      (final_report, "review artifact changed")]:
+                with self.subTest(artifact=artifact.name):
+                    original = artifact.read_bytes()
+                    try:
+                        artifact.write_bytes(b"changed")
+                        assert_rejected(message)
+                    finally:
+                        artifact.write_bytes(original)
+
+        finished = record(completed, saved["revision"])
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        shown = call("task", "show", project, task_id)
+        self.assertEqual(shown, json.loads(finished.stdout))
+        self.assertEqual((shown["task_id"], shown["status"], shown["revision"],
+                          shown["verification_state"]), (task_id, "completed", 2, "current"))
+
     def settlement_fixture(self):
         from orchestra_kit.evidence import create_evidence
         from orchestra_kit.fingerprint import fingerprint_paths
         self.assertEqual(self.run_cli('init', str(self.project)).returncode, 0)
         (self.project/'app.py').write_text('working')
         (self.project/'other.py').write_text('uncovered')
-        config=self.project/'.orchestra/project.toml'
-        config.write_text(config.read_text().replace('require_fresh_evidence = false', 'require_fresh_evidence = true'))
         data=self.project/'check.json'
         data.write_text(json.dumps({'files':['app.py'], 'checks':[{'argv':[sys.executable,'-c','print("passed")'], 'failure_cause':'implementation'}]}))
         run=self.run_cli('evidence','run',str(self.project),'--input',str(data))
@@ -99,8 +207,6 @@ class ExtensionCLITests(unittest.TestCase):
     def test_evidence_and_queue_lifecycle_needs_actual_fresh_gates(self):
         self.assertEqual(self.run_cli('init',str(self.project)).returncode,0)
         (self.project/'app.py').write_text('works')
-        config=self.project/'.orchestra/project.toml'
-        config.write_text(config.read_text().replace('require_fresh_evidence = false','require_fresh_evidence = true'))
         data=self.project/'check.json';data.write_text(json.dumps({'files':['app.py'],'checks':[{'argv':[sys.executable,'-c','print("passed")'],'failure_cause':'implementation'}]}))
         checked=self.run_cli('evidence','run',str(self.project),'--input',str(data))
         self.assertEqual(checked.returncode,0,checked.stderr)

@@ -75,24 +75,24 @@ repair matter, use the native CLI runner described in
 
 ## Verify and finish
 
-Choose the tool for each operation before requesting more access. Prefer an
-available read-only connector for remote reads it supports, including CI status
-and logs; retain its own access checks. Run local inspection and checks in the
-existing sandbox. Separate independent reads from installation, publication,
-network or protected writes so one restricted step does not elevate the whole
-phase. Inspect a denial before retrying; request only the access that step needs.
-Use `setup --check` to inspect an installed bundle; current `setup` and
-`install-skill` also return without writes. Batch independent observations and
-use a bounded watcher when a suitable connector is unavailable. For execution
-alternatives and evidence limits, see [execution](references/execution.md).
-Keep genuine approval requests and user questions visible. Third-party monitors
-may label automatic approval review as waiting for a person; reducing redundant
-checks does not correct that monitor's event classification.
+Use the sandbox for local checks and prefer read-only connectors for remote
+reads. Isolate restricted operations and inspect denials before requesting
+narrow access. Batch independent reads and use a bounded watcher when a
+connector is unavailable. Use `setup --check` for installed bundles. A current
+`setup` or `install-skill` returns without writes. See
+[execution](references/execution.md) for execution alternatives.
+Keep real approvals and user questions visible. Third-party monitors can
+mistake automatic review for a user approval request.
 
-Inspect relevant diffs, acceptance criteria, and actual check output. Obtain the
-configured independent reviews; report unresolved gates instead of inventing a
-pass. For substantial configured work, read [state](references/state.md) and keep
-an explicit task UUID and revision. Recheck the repository when resuming.
+Inspect the diff, criteria, outputs and independent reviews. Before recording
+`completed` with `workflow.require_fresh_evidence`, verify each required check
+and every recorded review has a current `evidence_ref` covering its subjects.
+Run missing checks with `evidence run`. Use `evidence bind` to adopt current
+prior evidence for this task UUID. Refresh evidence if files or scope change.
+Keep separate leaf and final certificates. When evidence is missing, record
+`running` or `blocked` and the concrete next step. Read back `task show` and require both
+`completed` and `verification_state: current`. See [state](references/state.md)
+for the task UUID and revision workflow. Recheck sources when resuming.
 
 Report the outcome, observed verification, and material limitations. Preserve
 user changes and session authority for commits, messaging, publication, and

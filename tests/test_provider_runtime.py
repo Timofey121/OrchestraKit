@@ -56,6 +56,7 @@ class ProviderRuntimeTests(unittest.TestCase):
         self.project = root / "project"
         self.project.mkdir()
         (self.project / ".orchestra").mkdir()
+        (self.project / "app.py").write_text("value = 1\n", encoding="utf-8")
         config = (KIT / "templates/project.toml").read_text(encoding="utf-8")
         config = config.replace(
             '[profiles.cheap]\nmodel = "gpt-5.6-luna"\neffort = "medium"',
@@ -95,6 +96,7 @@ class ProviderRuntimeTests(unittest.TestCase):
             "risk": "low",
             "size": "substantial",
             "independent": True,
+            "evidence_files": ["app.py"],
             "brief": {
                 name: name.lower()
                 for name in (

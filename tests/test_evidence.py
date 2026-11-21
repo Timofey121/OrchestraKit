@@ -44,7 +44,6 @@ class EvidenceTests(unittest.TestCase):
     def test_completion_refuses_stale_and_missing_gate_bindings(self):
         from orchestra_kit.evidence import run_evidence,create_evidence
         from orchestra_kit.state import start_task,record_task
-        p=self.project/'.orchestra/project.toml';p.write_text(p.read_text().replace('require_fresh_evidence = false','require_fresh_evidence = true'))
         run=start_task(self.project,KIT,'work')
         checked=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','pass'],'failure_cause':'implementation'}])
         result={'status':'completed','summary':'done','changed_files':['app.py'],'checks':[{'command':'actual','outcome':'pass','evidence':checked['evidence_ref'],'evidence_ref':checked['evidence_ref']}], 'acceptance':[{'criterion':'works','satisfied':True,'evidence':'root inspected'}], 'reviews':[{'level':'final','verdict':'PASS','evidence':'review','evidence_ref':checked['evidence_ref']}]}
@@ -69,7 +68,7 @@ class EvidenceTests(unittest.TestCase):
         from orchestra_kit.evidence import run_evidence,create_evidence
         from orchestra_kit.state import start_task,record_task
         p=self.project/'.orchestra/project.toml'
-        p.write_text(p.read_text().replace('mode = "adaptive"','mode = "strict"').replace('review_levels = ["final"]','review_levels = ["leaf", "final"]').replace('require_fresh_evidence = false','require_fresh_evidence = true'))
+        p.write_text(p.read_text().replace('mode = "adaptive"','mode = "strict"').replace('review_levels = ["final"]','review_levels = ["leaf", "final"]'))
         run=start_task(self.project,KIT,'work')
         checked=run_evidence(self.project,['app.py'],[{'argv':[sys.executable,'-c','pass'],'failure_cause':'implementation'}])
         report=self.project/'leaf-review.txt';report.write_text('VERDICT: PASS\nIndependent leaf fixture reviewer')
@@ -88,5 +87,5 @@ class EvidenceTests(unittest.TestCase):
         for value in ['true','0','-1','1.5']:
             p.write_text(old.replace('mode = "adaptive"',f'mode = "adaptive"\nmax_launches = {value}'))
             with self.assertRaises(ConfigError):load_config(self.project,KIT)
-        p.write_text(old.replace('mode = "adaptive"','mode = "adaptive"\nmax_launches = 3').replace('require_fresh_evidence = false','require_fresh_evidence = true'))
+        p.write_text(old.replace('mode = "adaptive"','mode = "adaptive"\nmax_launches = 3'))
         self.assertEqual(load_config(self.project,KIT).workflow.max_launches,3)

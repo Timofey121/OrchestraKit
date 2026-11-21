@@ -52,10 +52,11 @@ retain only the repair-cycle limit.
 from one new leaf leaking into another. `fresh_reviewer_always` gives each
 review and re-review a clean independent context.
 
-Optional `require_fresh_evidence` is boolean and defaults to false for legacy
-compatibility. Set it to true to require source-bound `evidence_ref` fields on
-required completion checks and reviews and an explicit source snapshot before
-queue claims. Artifact and source mutations invalidate those bindings.
+New projects set `require_fresh_evidence = true` in the generated configuration.
+It requires current `evidence_ref` fields for every required completion check
+and every recorded review, plus a source snapshot before queue claims. Source
+or artifact changes invalidate the evidence. Existing projects keep their
+settings. When the option is absent, the parser uses `false`.
 
 Optional `max_launches` is a positive integer. It limits attempts within a native
 job and dispatches across the local queue's persisted history. Queue observations

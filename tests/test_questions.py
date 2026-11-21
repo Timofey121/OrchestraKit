@@ -200,6 +200,9 @@ class QuestionProtocolTests(unittest.TestCase):
 
         request = self.ask()
 
+        config = self.project / ".orchestra/project.toml"
+        config.write_text(config.read_text().replace("require_fresh_evidence = true",
+                                                     "require_fresh_evidence = false"))
         record_task(self.project, KIT, self.task["task_id"], {
             "status": "completed", "summary": "Done", "changed_files": [],
             "checks": [{"command": "fixture", "outcome": "pass", "evidence": "fixture"}],

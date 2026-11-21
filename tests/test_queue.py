@@ -26,7 +26,12 @@ class QueueTests(unittest.TestCase):
         self.project = Path(self.temp.name) / "project"
         (self.project / ".orchestra").mkdir(parents=True)
         self.config = self.project / ".orchestra" / "project.toml"
-        self.config.write_text((KIT / "templates" / "project.toml").read_text(), encoding="utf-8")
+        # Queue mechanics also apply to legacy graphs without snapshots.
+        template = (KIT / "templates/project.toml").read_text()
+        self.config.write_text(
+            template.replace("require_fresh_evidence = true", "require_fresh_evidence = false"),
+            encoding="utf-8",
+        )
         self.assertIsNotNone(importlib.util.find_spec("orchestra_kit.queue"))
         self.module = importlib.import_module("orchestra_kit.queue")
         self.queue = self.module.Queue(self.project, KIT)

@@ -41,8 +41,10 @@ class InstallTests(unittest.TestCase):
                                 cwd=self.root, env=environment, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["profile"], "cheap")
+        (project / 'app.py').write_text('value = 1\n', encoding='utf-8')
         job = self.root / 'job.json'
         job.write_text(json.dumps({'role': 'worker', 'size': 'substantial',
+            'evidence_files': ['app.py'],
             'independent': True, 'complexity': 'simple', 'risk': 'low',
             'brief': {key: 'bounded' for key in ['GOAL', 'SOURCES OF TRUTH', 'SCOPE',
                 'ACCEPTANCE CRITERIA', 'VERIFICATION', 'CONTEXT']},

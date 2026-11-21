@@ -19,7 +19,9 @@ class StateTests(unittest.TestCase):
         self.project = Path(self.temp.name) / 'project'
         (self.project / '.orchestra').mkdir(parents=True)
         self.config_path = self.project / '.orchestra/project.toml'
-        self.config_path.write_text((KIT / 'templates/project.toml').read_text())
+        # State fixtures represent older projects without the setting.
+        template = (KIT / 'templates/project.toml').read_text()
+        self.config_path.write_text(template.replace('require_fresh_evidence = true\n', ''))
         self.assertIsNotNone(importlib.util.find_spec('orchestra_kit.state'), 'durable task state is missing')
         self.state = importlib.import_module('orchestra_kit.state')
 
@@ -81,11 +83,20 @@ class StateTests(unittest.TestCase):
                 self.state.start_task(self.project, KIT, 'Invalid binding', chat_id=value)
         self.assertEqual(len(self.state.list_tasks(self.project)), before)
 
-    def test_recorded_evidence_is_durable_and_summary_is_compact(self) -> None:
+    def test_legacy_completion_and_config_survive_sync(self) -> None:
+        from orchestra_kit.project import sync_project
+
         run = self.start()
         self.record(run, self.evidence())
+        config = self.config_path.read_bytes()
+        history = self.project / '.orchestra/runs' / f"{run['task_id']}.json"
+        saved_history = history.read_bytes()
+        sync_project(self.project, KIT)
+        self.assertEqual(self.config_path.read_bytes(), config)
+        self.assertEqual(history.read_bytes(), saved_history)
         shown = self.state.show_task(self.project, run['task_id'])
         self.assertEqual(shown['status'], 'completed')
+        self.assertEqual(shown['verification_state'], 'unbound')
         self.assertEqual(shown['revision'], 1)
         self.assertEqual(shown['last_result']['changed_files'], ['src/app.py'])
         self.assertNotIn('history', shown)

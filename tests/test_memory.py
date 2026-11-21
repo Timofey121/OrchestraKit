@@ -127,7 +127,14 @@ class SolutionMemoryTests(unittest.TestCase):
             "acceptance": [{"criterion": "claimed", "satisfied": True, "evidence": "claimed"}],
             "reviews": [{"level": "final", "verdict": "PASS", "evidence": "claimed"}], "metrics": {},
         }
-        record_task(self.project, KIT, fake["task_id"], fake_result, expected_revision=0)
+        config = self.project / ".orchestra/project.toml"
+        original = config.read_text()
+        try:
+            config.write_text(original.replace("require_fresh_evidence = true",
+                                               "require_fresh_evidence = false"))
+            record_task(self.project, KIT, fake["task_id"], fake_result, expected_revision=0)
+        finally:
+            config.write_text(original)
         fake_data = self.data(task_id=fake["task_id"])
         with self.assertRaisesRegex(ValueError, "stale"):
             store_solution(self.project, KIT, fake_data)

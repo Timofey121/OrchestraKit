@@ -1,10 +1,9 @@
 # Durable task state
 
-For fresh completion bindings and compact identity-bound handoffs, read
-[reliability](reliability.md). Required check and review records can include
-`evidence_ref`; configured fresh-evidence completion validates those artifacts
-and their covered files. Historical task status and current verification
-freshness are separate fields in `task show`.
+New projects set `workflow.require_fresh_evidence = true`. Existing project
+settings and task history are preserved. `task show` reports saved task status
+separately from verification freshness. See [reliability](reliability.md) for
+the evidence and handoff formats.
 
 Use the launcher with an explicit PROJECT and task UUID:
 
@@ -31,9 +30,9 @@ A result file contains:
   "completed_steps": ["Implementation", "Verification", "Final review"],
   "next_steps": [],
   "changed_files": ["src/example.py"],
-  "checks": [{"command": "REPOSITORY_CHECK_COMMAND", "outcome": "pass", "evidence": "ACTUAL_OUTPUT_OR_ARTIFACT", "required": true}],
+  "checks": [{"command": "REPOSITORY_CHECK_COMMAND", "outcome": "pass", "evidence": "ACTUAL_OUTPUT_OR_ARTIFACT", "required": true, "evidence_ref": ".orchestra/evidence/CHECK_UUID.json"}],
   "acceptance": [{"criterion": "USER_ACCEPTANCE_CRITERION", "satisfied": true, "evidence": "OBSERVED_BEHAVIOR"}],
-  "reviews": [{"level": "final", "verdict": "PASS", "evidence": "INDEPENDENT_REVIEW_RESULT"}],
+  "reviews": [{"level": "final", "verdict": "PASS", "evidence": "INDEPENDENT_REVIEW_RESULT", "evidence_ref": ".orchestra/evidence/REVIEW_UUID.json"}],
   "metrics": {"input_tokens": null, "output_tokens": null, "elapsed_seconds": null, "cost_usd": null},
   "failure_cause": null
 }
@@ -55,10 +54,29 @@ reconcile the original criteria and record progress at the current revision.
 Only record final review and completion when the whole requested outcome meets
 its confirmed criteria.
 
-Separate review levels require separate evidence certificates when refs are
-provided. The root still checks reviewer independence: different certificate
-identifiers cannot prove different people or model sessions. Task admission
-rechecks the project configuration before persisting a result.
+### Complete a task with current evidence
+
+Before recording `completed`, reconcile the confirmed criteria with actual
+outputs. With `require_fresh_evidence = true`, verify every required check and
+every review included in the result. Each needs a current `evidence_ref` for
+the relevant project files, including all `changed_files`. Keep separate
+certificates for leaf and final review and confirm reviewer independence.
+
+- Run a missing required check with `evidence run PROJECT --input CHECKS.json`.
+- After inspecting current evidence from a previous run, adopt it for the
+  current task with
+  `evidence bind PROJECT --ref REF --kind check|review --task-id UUID`.
+  Use the returned reference. Binding preserves the source and artifact
+  hashes, and the root establishes reviewer independence.
+- Use `evidence check` with the relevant paths to verify coverage. If the files
+  or coverage have changed, run the affected checks again and obtain fresh
+  review evidence for the updated scope.
+
+While evidence is missing, record `running` or `blocked` and put the concrete
+verification step in `next_steps`. After recording, reread `task show` for the same
+UUID. With fresh evidence required, success means `status: completed` and
+`verification_state: current`. A historical completion can read as `stale` or
+`unbound` while keeping its saved status.
 
 Completion refuses missing/failed required checks, unmet acceptance criteria,
 missing/failed configured reviews, pending next steps, or an unresolved failure.
@@ -85,10 +103,6 @@ for rejected approaches. Evidence does not establish a statement's semantic
 meaning; the root must inspect it. Reconsider a rejected approach when new facts
 warrant it. These records never extend authority or replace constraints.
 
-For accepted-solution memory, root-owned evidence must identify the task UUID.
-After inspecting independent execution/review evidence, root may explicitly
-adopt it with `evidence bind PROJECT --ref REF --kind check|review --task-id UUID`
-before recording completion. This rechecks and copies the certificate's current
-source, check and report bindings under task ownership; original certificates
-remain intact. It cannot promote check evidence to PASS review. Ownership is a
-local assertion, not proof of reviewer independence; root must establish that.
+Accepted-solution memory requires root-owned evidence for the task UUID. Bind
+prior evidence before completion using the procedure above. Original certificates
+remain intact, and check evidence cannot be promoted to PASS review.
